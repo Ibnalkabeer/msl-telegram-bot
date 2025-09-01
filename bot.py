@@ -1,4 +1,3 @@
-
 import os, time, sys, requests
 import pandas as pd
 import numpy as np
@@ -18,14 +17,14 @@ EXPIRY_SECONDS = 300            # 5 minutes expiry
 SIGNALS_PER_SESSION = 5
 START_DELAY_SECONDS = 30        # wait after "session starts" before first signal
 AFTER_RESULT_DELAY = 30         # wait after each result before next signal
+
 PAIRS = [
-    ("EURUSD=X","EUR/USD"),
-    ("GBPUSD=X","GBP/USD"),
-    ("USDJPY=X","USD/JPY"),
-    ("AUDUSD=X","AUD/USD"),
-    ("USDCHF=X","USD/CHF"),
-    ("USDCAD=X","USD/CAD"),
-    ("NZDUSD=X","NZD/USD"),
+    ("EURUSD=X","EUR/USD"), ("GBPUSD=X","GBP/USD"), ("USDJPY=X","USD/JPY"),
+    ("AUDUSD=X","AUD/USD"), ("USDCHF=X","USD/CHF"), ("USDCAD=X","USD/CAD"),
+    ("NZDUSD=X","NZD/USD"), ("EURJPY=X","EUR/JPY"), ("GBPJPY=X","GBP/JPY"),
+    ("AUDJPY=X","AUD/JPY"), ("EURGBP=X","EUR/GBP"), ("EURAUD=X","EUR/AUD"),
+    ("XAUUSD=X","Gold"), ("XAGUSD=X","Silver"),
+    ("^GSPC","S&P 500"), ("^NDX","NASDAQ"),
 ]
 
 # ---------------- Telegram ----------------
@@ -37,7 +36,7 @@ def tg_send(text, parse_mode="HTML"):
             "text": text,
             "parse_mode": parse_mode,
             "disable_web_page_preview": True
-        })
+        }, timeout=20)
         if r.status_code != 200:
             print("Telegram send failed:", r.status_code, r.text)
     except Exception as e:
@@ -64,8 +63,7 @@ def rsi(series, length=14):
     roll_up = up.ewm(alpha=1/length, adjust=False).mean()
     roll_down = down.ewm(alpha=1/length, adjust=False).mean()
     rs = roll_up.div(roll_down.replace(0, np.nan))
-    r = 100 - (100 / (1 + rs))
-    return r.fillna(50)
+    return (100 - (100 / (1 + rs))).fillna(50)
 
 def vortex(df, length=14):
     high, low, close = df["High"], df["Low"], df["Close"]
@@ -78,11 +76,26 @@ def vortex(df, length=14):
     sumTR = tr.rolling(length).sum()
     sumVP = vp.rolling(length).sum()
     sumVM = vm.rolling(length).sum()
-    vi_plus = (sumVP / sumTR).fillna(method='bfill').fillna(1.0)
-    vi_minus = (sumVM / sumTR).fillna(method='bfill').fillna(1.0)
-    df = df.copy()
-    df["vi_plus"] = vi_plus
-    df["vi_minus"] = vi_minus
+    df["vi_plus"] = (sumVP / sumTR).fillna(1.0)
+    df["vi_minus"] = (sumVM / sumTR).fillna(1.0)
+    return df
+
+def add_extra_indicators(df):
+    # MACD
+    df["ema12"] = ema(df["Close"], 12)
+    df["ema26"] = ema(df["Close"], 26)
+    df["macd"] = df["ema12"] - df["ema26"]
+    df["macd_signal"] = ema(df["macd"], 9)
+    # Stochastic
+    low14 = df["Low"].rolling(14).min()
+    high14 = df["High"].rolling(14).max()
+    df["stoch_k"] = 100 * (df["Close"] - low14) / (high14 - low14)
+    df["stoch_d"] = df["stoch_k"].rolling(3).mean()
+    # Bollinger Bands
+    df["sma20"] = df["Close"].rolling(20).mean()
+    std20 = df["Close"].rolling(20).std()
+    df["bb_upper"] = df["sma20"] + 2 * std20
+    df["bb_lower"] = df["sma20"] - 2 * std20
     return df
 
 # ---------------- Data & Signal ----------------
@@ -95,44 +108,54 @@ def fetch_df(ticker, interval, period):
     except Exception as e:
         print(f"[ERROR] yfinance error {ticker} {interval}: {e}")
         return None
-
     df = df.dropna().copy()
     df["EMA9"] = ema(df["Close"], 9)
     df["EMA21"] = ema(df["Close"], 21)
     df["RSI14"] = rsi(df["Close"], 14)
     df = vortex(df, 14)
+    df = add_extra_indicators(df)
     return df.dropna()
 
 def score_from_df(df):
-    if df is None or len(df) < 15:
+    # require enough history for the indicators
+    if df is None or len(df) < 25:
         return None
-    c = df.iloc[-1]
-    p = df.iloc[-2]
+    c, p = df.iloc[-1], df.iloc[-2]
 
+    # Base signals
     ema_bull = (c.EMA9 > c.EMA21) and (p.EMA9 <= p.EMA21)
     ema_bear = (c.EMA9 < c.EMA21) and (p.EMA9 >= p.EMA21)
     rsi_up50 = (c.RSI14 > 50) and (p.RSI14 <= 50)
-    rsi_dn50 = (c.RSI14 < 50) and (p.RSI14 >= 50)   # fixed bug (was p.EMA21)
+    rsi_dn50 = (c.RSI14 < 50) and (p.RSI14 >= 50)
     vort_bull = c.vi_plus > c.vi_minus
     vort_bear = c.vi_plus < c.vi_minus
 
-    bull = int(ema_bull) + int(rsi_up50) + int(vort_bull)
-    bear = int(ema_bear) + int(rsi_dn50) + int(vort_bear)
+    # New indicators
+    macd_bull = (c.macd > c.macd_signal) and (p.macd <= p.macd_signal)
+    macd_bear = (c.macd < c.macd_signal) and (p.macd >= p.macd_signal)
+    stoch_bull = (not np.isnan(c.stoch_k)) and (c.stoch_k > c.stoch_d) and (c.stoch_k < 80)
+    stoch_bear = (not np.isnan(c.stoch_k)) and (c.stoch_k < c.stoch_d) and (c.stoch_k > 20)
+    bb_bull = c.Close < c.bb_lower
+    bb_bear = c.Close > c.bb_upper
 
-    gap = (c.EMA9 - c.EMA21) / max(abs(c.Close), 1e-9)
-    vort_spread = (c.vi_plus - c.vi_minus)
+    # Combine scores
+    bull = sum([ema_bull, rsi_up50, vort_bull, macd_bull, stoch_bull, bb_bull])
+    bear = sum([ema_bear, rsi_dn50, vort_bear, macd_bear, stoch_bear, bb_bear])
 
-    strength = (bull - bear) + (vort_spread * 0.3) + (gap * 200)
+    strength = float(bull - bear)
     direction = "CALL 🔼" if strength > 0 else "PUT 🔽"
 
     used = []
     if ema_bull or ema_bear: used.append("EMA")
     if rsi_up50 or rsi_dn50: used.append("RSI")
     if vort_bull or vort_bear: used.append("Vortex")
+    if macd_bull or macd_bear: used.append("MACD")
+    if stoch_bull or stoch_bear: used.append("Stoch")
+    if bb_bull or bb_bear: used.append("BB")
 
     return {
         "direction": direction,
-        "strength": abs(float(strength)),
+        "strength": abs(strength),
         "price": float(c.Close),
         "strategy": "+".join(used) if used else "EMA+RSI+Vortex"
     }
@@ -150,19 +173,20 @@ def best_timeframe_signal(ticker):
     return (None, None)
 
 def latest_price(ticker):
-    try:
-        df = yf.download(ticker, interval="1m", period="1d", progress=False)
-        if df is None or df.empty:
-            return None
-        return float(df["Close"].iloc[-1])
-    except Exception as e:
-        print("latest price error", e)
-        return None
+    # try 1m, fallback 5m or last close
+    for interval in ["1m", "5m", "15m"]:
+        try:
+            df = yf.download(ticker, interval=interval, period="1d", progress=False)
+            if df is None or df.empty:
+                continue
+            return float(df["Close"].iloc[-1])
+        except Exception:
+            continue
+    return None
 
 # ---------------- Pretty formatting ----------------
-def format_signal_card(sig, expiry_minutes):
-    # Use <pre> to keep the box aligned in Telegram
-    return (
+def format_signal_card(sig, expiry_minutes, note=""):
+    pre = (
         "<pre>"
         "┏━━━━━━━━ SIGNAL ━━━━━━━━\n"
         f"┃ Pair:      {sig['pair']}\n"
@@ -172,14 +196,16 @@ def format_signal_card(sig, expiry_minutes):
         "┗━━━━━━━━━━━━━━━━━━━━━━━━━"
         "</pre>"
     )
+    if note:
+        pre += f"\n⚠️ <i>{note}</i>"
+    return pre
 
-# ---------------- Session flow (sequential) ----------------
+# ---------------- Session flow ----------------
 def run_session():
     stylish_greeting()
     # Wait before first signal
     time.sleep(START_DELAY_SECONDS)
 
-    # Build candidates
     candidates = []
     for yf_sym, nice in PAIRS:
         sig, tf = best_timeframe_signal(yf_sym)
@@ -189,44 +215,92 @@ def run_session():
             sig["tf"] = tf
             candidates.append(sig)
         else:
-            print(f"[INFO] No signal for {nice}")
+            print(f"[INFO] No strong signal for {nice}")
 
+    # --- Fallback: attempt a looser scan on 5m if nothing found ---
     if not candidates:
-        tg_send("⚠️ <b>No reliable signals found this session.</b>")
-        tg_send(("<b>Morning session ends</b>" if SESSION.lower()=="morning" else "<b>Evening session ends</b>") + " ✅")
-        return
+        print("[INFO] No strict candidates — performing fallback scan on 5m for all pairs.")
+        for yf_sym, nice in PAIRS:
+            df = fetch_df(yf_sym, "5m", "5d")
+            if df is None:
+                continue
+            sig = score_from_df(df)
+            if sig:
+                sig["yf"] = yf_sym
+                sig["pair"] = nice
+                sig["tf"] = "5m"
+                # mark fallback note in strategy if it's weak
+                sig["strategy"] = sig.get("strategy", "") + " | fallback"
+                candidates.append(sig)
 
-    # Top N unique pairs
+    # --- If still no candidates: momentum fallback (guarantee signals) ---
+    if not candidates:
+        print("[WARN] Fallback scan failed — using momentum fallback to guarantee signals.")
+        momentums = []
+        for yf_sym, nice in PAIRS:
+            df = fetch_df(yf_sym, "15m", "7d")
+            if df is None or df.empty:
+                continue
+            # simple momentum: percent change over the fetched window
+            try:
+                first = df["Close"].iloc[0]
+                last = df["Close"].iloc[-1]
+                mom = (last - first) / first
+                direction = "CALL 🔼" if mom > 0 else "PUT 🔽"
+                strength = abs(mom)
+                momentums.append({"yf": yf_sym, "pair": nice, "direction": direction, "strength": strength, "price": float(last), "strategy": "MomentumFallback", "tf": "15m"})
+            except Exception as e:
+                print("momentum calc error", e)
+                continue
+        # pick top by absolute momentum
+        momentums.sort(key=lambda x: x["strength"], reverse=True)
+        for m in momentums[:SIGNALS_PER_SESSION]:
+            candidates.append(m)
+
+    # sort and dedupe by pair, pick top N
     candidates.sort(key=lambda x: x["strength"], reverse=True)
     queue, used = [], set()
     for c in candidates:
-        if c["pair"] not in used:
-            queue.append(c); used.add(c["pair"])
+        if c["pair"] in used:
+            continue
+        queue.append(c)
+        used.add(c["pair"])
         if len(queue) >= SIGNALS_PER_SESSION:
             break
 
-    # Sequential: send signal -> wait expiry -> send result -> wait 30s -> next
+    if not queue:
+        tg_send("⚠️ <b>Unable to produce any signals this session.</b>")
+        tg_send(("<b>Morning session ends</b>" if SESSION.lower()=="morning" else "<b>Evening session ends</b>") + " ✅")
+        return
+
+    # Sequential send -> wait expiry -> post result -> wait AFTER_RESULT_DELAY
     for sig in queue:
-        # Send card
-        tg_send(format_signal_card(sig, int(EXPIRY_SECONDS/60)))
-        # Capture entry
+        # Ensure sig has required keys (momentum fallback may differ)
+        if "tf" not in sig:
+            sig["tf"] = sig.get("tf","?")
+        if "strategy" not in sig:
+            sig["strategy"] = sig.get("strategy","Mixed")
+
+        tg_send(format_signal_card(sig, int(EXPIRY_SECONDS/60), note="Auto-generated signal"))
+        # capture entry price
         entry_price = latest_price(sig["yf"])
-        # Wait expiry
+        # wait expiry
         time.sleep(EXPIRY_SECONDS)
-        # Check result
+        # get exit price
         exit_price = latest_price(sig["yf"])
         if entry_price is None or exit_price is None:
             tg_send("⚪ <b>Result:</b> NO_PRICE")
         else:
+            # check win
             if ("CALL" in sig["direction"] and exit_price > entry_price) or \
-               ("PUT"  in sig["direction"] and exit_price < entry_price):
+               ("PUT" in sig["direction"] and exit_price < entry_price):
                 tg_send("✅ <b>Win</b>\nCongratulation 🎊")
             else:
                 tg_send("❌ <b>Lose</b>\nKeep studying and reviewing trades.")
-        # Pause before next signal
+        # wait before next
         time.sleep(AFTER_RESULT_DELAY)
 
-    # End
+    # End message
     tg_send(("<b>Morning session ends</b>" if SESSION.lower()=="morning" else "<b>Evening session ends</b>") + " ✅")
 
 if __name__ == "__main__":
