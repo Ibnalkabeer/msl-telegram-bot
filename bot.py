@@ -1,29 +1,32 @@
 # signal_bot.py
+# GitHub Actions bot: picks signals and posts sessions to Telegram
 import os, time, sys, requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from datetime import datetime
 
-# ---------------- CONFIG (read from env / GitHub secrets) ----------------
+# ---------------- CONFIG (do NOT hardcode secrets here) ----------------
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-SESSION = os.environ.get("SESSION", "morning")  # "morning" or "evening"
+SESSION = os.environ.get("SESSION", "morning")   # set by workflow (morning/evening)
 
 if not TOKEN or not CHAT_ID:
-    print("ERROR: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID environment variables are required.")
+    print("ERROR: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set as repo secrets")
     sys.exit(1)
 
-# Behavior settings
-EXPIRY_SECONDS = 60               # 1 minute expiry
+# Behavior
+EXPIRY_SECONDS = 300           # 5 minutes expiry
 SIGNALS_PER_SESSION = 5
+SIGNAL_INTERVAL_SECONDS = 60   # 1 minute between sends
 PAIRS = [
-    ("EURUSD=X","EURUSD"),
-    ("GBPUSD=X","GBPUSD"),
-    ("USDJPY=X","USDJPY"),
-    ("AUDUSD=X","AUDUSD"),
-    ("USDCHF=X","USDCHF"),
-    ("USDCAD=X","USDCAD"),
-    ("NZDUSD=X","NZDUSD"),
+    ("EURUSD=X","EUR/USD"),
+    ("GBPUSD=X","GBP/USD"),
+    ("USDJPY=X","USD/JPY"),
+    ("AUDUSD=X","AUD/USD"),
+    ("USDCHF=X","USD/CHF"),
+    ("USDCAD=X","USD/CAD"),
+    ("NZDUSD=X","NZD/USD"),
 ]
 
 # ---------------- Helpers ----------------
@@ -45,7 +48,7 @@ def rsi(series, length=14):
     down = -delta.clip(upper=0)
     roll_up = up.ewm(alpha=1/length, adjust=False).mean()
     roll_down = down.ewm(alpha=1/length, adjust=False).mean()
-    rs = roll_up / roll_down.replace(0, np.nan)
+    rs = roll_up.div(roll_down.replace(0, np.nan))
     r = 100 - (100 / (1 + rs))
     return r.fillna(50)
 
@@ -60,19 +63,18 @@ def vortex(df, length=14):
     sumTR = tr.rolling(length).sum()
     sumVP = vp.rolling(length).sum()
     sumVM = vm.rolling(length).sum()
-    vi_plus = (sumVP / sumTR).fillna(method="bfill").fillna(1.0)
-    vi_minus = (sumVM / sumTR).fillna(method="bfill").fillna(1.0)
+    vi_plus = (sumVP / sumTR).fillna(method='bfill').fillna(1.0)
+    vi_minus = (sumVM / sumTR).fillna(method='bfill').fillna(1.0)
     df = df.copy()
     df["vi_plus"] = vi_plus
     df["vi_minus"] = vi_minus
     return df
 
 def fetch_df(ticker, interval, period):
-    # returns dataframe with indicators
     try:
         df = yf.download(ticker, interval=interval, period=period, progress=False)
     except Exception as e:
-        print("yfinance download error:", e)
+        print("yfinance error for", ticker, interval, e)
         return None
     if df is None or df.empty:
         return None
@@ -88,13 +90,10 @@ def score_from_df(df):
         return None
     c = df.iloc[-1]
     p = df.iloc[-2]
-    # EMA crossover detection
     ema_bull = (c.EMA9 > c.EMA21) and (p.EMA9 <= p.EMA21)
     ema_bear = (c.EMA9 < c.EMA21) and (p.EMA9 >= p.EMA21)
-    # RSI crossing 50
     rsi_up50 = (c.RSI14 > 50) and (p.RSI14 <= 50)
     rsi_dn50 = (c.RSI14 < 50) and (p.RSI14 >= 50)
-    # Vortex
     vort_bull = c.vi_plus > c.vi_minus
     vort_bear = c.vi_plus < c.vi_minus
 
@@ -121,18 +120,18 @@ def score_from_df(df):
     return {"direction": direction, "strength": abs(float(strength)), "price": float(c.Close), "strategy": strategy}
 
 def best_timeframe_signal(ticker):
-    # Compare 1m vs 5m signals
+    # try 1m then 5m; compare strength
     s1 = None; s5 = None
     try:
         d1 = fetch_df(ticker, "1m", "1d")
         s1 = score_from_df(d1)
     except Exception as e:
-        print("1m fetch/score error:", e)
+        print("1m error", e)
     try:
         d5 = fetch_df(ticker, "5m", "5d")
         s5 = score_from_df(d5)
     except Exception as e:
-        print("5m fetch/score error:", e)
+        print("5m error", e)
     if s1 and s5:
         return (s1, "1m") if s1["strength"] >= s5["strength"] else (s5, "5m")
     if s1:
@@ -148,21 +147,22 @@ def latest_price(ticker):
             return None
         return float(df["Close"].iloc[-1])
     except Exception as e:
-        print("latest_price error:", e)
+        print("latest price error", e)
         return None
 
 # ---------------- Session flow ----------------
 def run_session():
+    # Greeting + start
     if SESSION.lower() == "morning":
-        tg_send("Good Morning Family")
+        tg_send("☀️ Good Morning Family")
         time.sleep(60)
         tg_send("Morning session starts")
     else:
-        tg_send("Good Evening Family")
+        tg_send("🌙 Good Evening Family")
         time.sleep(60)
         tg_send("Evening session starts")
 
-    # Build candidates
+    # Build strong candidate signals
     candidates = []
     for yf_sym, nice in PAIRS:
         sig, tf = best_timeframe_signal(yf_sym)
@@ -178,46 +178,55 @@ def run_session():
         tg_send(("Morning" if SESSION.lower()=="morning" else "Evening") + " session ends")
         return
 
+    # choose top N unique pairs
     candidates.sort(key=lambda x: x["strength"], reverse=True)
-    used = set()
-    queue = []
+    used = set(); queue = []
     for c in candidates:
         if c["pair"] in used: continue
-        queue.append(c)
-        used.add(c["pair"])
+        queue.append(c); used.add(c["pair"])
         if len(queue) >= SIGNALS_PER_SESSION: break
-
-    # pad if fewer than required
     while len(queue) < SIGNALS_PER_SESSION and candidates:
         queue.append(candidates[0])
 
-    # send signals one-by-one and evaluate after expiry
+    # send signals spaced 1 minute apart, schedule checks
+    pending = []
     for sig in queue:
         header = "MSL Binary Signal"
-        body = f"Pair: {sig['pair']}\nDirection: {sig['direction']}\nExpiry: 1m\nStrategy: {sig['strategy']} | TF: {sig['tf']}"
-        tg_send(header)
-        time.sleep(0.5)
-        tg_send(body)
+        body = f"Pair: {sig['pair']}\nDirection: {sig['direction']}\nExpiry: {int(EXPIRY_SECONDS/60)}m\nStrategy: {sig['strategy']} | TF: {sig.get('tf','?')}"
+        tg_send(header); time.sleep(0.5); tg_send(body)
+        entry_price = latest_price(sig["yf"])
+        now_ts = time.time()
+        pending.append({"sig":sig, "entry":entry_price, "check_at": now_ts + EXPIRY_SECONDS})
+        time.sleep(SIGNAL_INTERVAL_SECONDS)
 
-        entry = latest_price(sig["yf"])
-        time.sleep(EXPIRY_SECONDS)
-        exitp = latest_price(sig["yf"])
-
-        if entry is None or exitp is None:
-            tg_send("⚪ Result: NO_PRICE")
-        else:
-            if sig["direction"] == "CALL":
-                if exitp > entry:
-                    tg_send("✅ Win\nCongratulation 🎊")
+    # wait and process pending results
+    while pending:
+        now_ts = time.time()
+        to_keep = []
+        for p in pending:
+            if now_ts >= p["check_at"]:
+                exit_price = latest_price(p["sig"]["yf"])
+                if p["entry"] is None or exit_price is None:
+                    tg_send("⚪ Result: NO_PRICE")
                 else:
-                    tg_send("❌ Lose\nKeep studying and reviewing trades.")
+                    if p["sig"]["direction"] == "CALL":
+                        if exit_price > p["entry"]:
+                            tg_send("✅ Win\nCongratulation 🎊")
+                        else:
+                            tg_send("❌ Lose\nKeep studying and reviewing trades.")
+                    else:
+                        if exit_price < p["entry"]:
+                            tg_send("✅ Win\nCongratulation 🎊")
+                        else:
+                            tg_send("❌ Lose\nKeep studying and reviewing trades.")
             else:
-                if exitp < entry:
-                    tg_send("✅ Win\nCongratulation 🎊")
-                else:
-                    tg_send("❌ Lose\nKeep studying and reviewing trades.")
+                to_keep.append(p)
+        pending = to_keep
+        if pending:
+            time.sleep(5)  # short sleep while waiting for next check
 
+    # end session
     tg_send(("Morning" if SESSION.lower()=="morning" else "Evening") + " session ends")
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     run_session()
