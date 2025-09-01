@@ -71,10 +71,17 @@ def ema(df):
     df["ema50"] = df["Close"].ewm(span=50, adjust=False).mean()
     return df
 
+def bollinger(df, period=20):
+    df["sma"] = df["Close"].rolling(period).mean()
+    df["stddev"] = df["Close"].rolling(period).std()
+    df["upper_bb"] = df["sma"] + (df["stddev"] * 2)
+    df["lower_bb"] = df["sma"] - (df["stddev"] * 2)
+    return df
+
 # ==============================
 # Strategy Rotation
 # ==============================
-STRATEGIES = ["RSI", "MACD", "STOCHASTIC", "VORTEX", "EMA"]
+STRATEGIES = ["RSI", "MACD", "STOCHASTIC", "VORTEX", "EMA", "BOLLINGER"]
 strategy_index = 0
 
 def generate_signal(df):
@@ -92,6 +99,8 @@ def generate_signal(df):
             signal, reasons = "CALL 📈", ["RSI oversold (<40)"]
         elif latest["rsi"] > 60:
             signal, reasons = "PUT 📉", ["RSI overbought (>60)"]
+        else:
+            signal, reasons = "CALL 📈", ["RSI neutral → bias upward"]
 
     elif strategy == "MACD":
         if latest["macd"] > latest["signal"]:
@@ -105,8 +114,7 @@ def generate_signal(df):
         elif latest["stoch_k"] > 70 and latest["stoch_d"] > 70:
             signal, reasons = "PUT 📉", ["Stochastic overbought (>70)"]
         else:
-            # fallback
-            signal, reasons = "CALL 📈", ["Stochastic neutral → bias upward"]
+            signal, reasons = "PUT 📉", ["Stochastic neutral → bias downward"]
 
     elif strategy == "VORTEX":
         if latest["vi_plus"] > latest["vi_minus"]:
@@ -120,26 +128,33 @@ def generate_signal(df):
         else:
             signal, reasons = "PUT 📉", ["EMA20 below EMA50 (bearish)"]
 
+    elif strategy == "BOLLINGER":
+        if latest["Close"] <= latest["lower_bb"]:
+            signal, reasons = "CALL 📈", ["Price at lower Bollinger band"]
+        elif latest["Close"] >= latest["upper_bb"]:
+            signal, reasons = "PUT 📉", ["Price at upper Bollinger band"]
+        else:
+            signal, reasons = "CALL 📈", ["Price mid-BB → bias upward"]
+
     strategy_index += 1
     return {"direction": signal, "strategy": strategy, "reasons": reasons}
 
 # ==============================
-# Assets
+# Assets (Expanded List)
 # ==============================
 PAIRS = [
     ("EURUSD=X","EUR/USD"), ("GBPUSD=X","GBP/USD"), ("USDJPY=X","USD/JPY"),
     ("AUDUSD=X","AUD/USD"), ("USDCHF=X","USD/CHF"), ("USDCAD=X","USD/CAD"),
     ("NZDUSD=X","NZD/USD"), ("EURJPY=X","EUR/JPY"), ("GBPJPY=X","GBP/JPY"),
     ("AUDJPY=X","AUD/JPY"), ("EURGBP=X","EUR/GBP"), ("EURAUD=X","EUR/AUD"),
-    ("GC=F","Gold"), ("SI=F","Silver"),
-    ("^GSPC","S&P 500"), ("^NDX","NASDAQ"),
+    ("CADJPY=X","CAD/JPY"), ("CHFJPY=X","CHF/JPY"), ("NZDJPY=X","NZD/JPY"),
+    ("GC=F","Gold"), ("SI=F","Silver"), ("^GSPC","S&P 500"), ("^NDX","NASDAQ"),
 ]
 
 # ==============================
 # Main Execution
 # ==============================
 def run_session():
-    # Session header
     send_telegram_message("🌞✨ *Good Morning Family* ✨🌞\n\n🎯 *MSL Binary Signal* 🎯\n━━━━━━━━━━━━━━━\n📊 Morning Session starts now!")
     time.sleep(30)
 
@@ -159,6 +174,7 @@ def run_session():
             df = stochastic(df)
             df = vortex(df)
             df = ema(df)
+            df = bollinger(df)
 
             signal = generate_signal(df)
 
@@ -176,7 +192,7 @@ def run_session():
                 )
                 send_telegram_message(msg)
 
-                # Simulated trade result
+                # Simulated result
                 time.sleep(60)
                 result = "✅ WIN" if signal_count % 2 == 0 else "❌ LOSE"
                 send_telegram_message(f"📊 Result for Signal {signal_count}: {result}")
