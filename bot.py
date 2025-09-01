@@ -87,9 +87,6 @@ strategy_index = 0
 def generate_signal(df):
     """Rotate through strategies and always return a signal."""
     global strategy_index
-    if len(df) < 30:
-        return None
-
     latest = df.iloc[-1]
     strategy = STRATEGIES[strategy_index % len(STRATEGIES)]
     signal, reasons = None, []
@@ -159,13 +156,15 @@ def run_session():
     time.sleep(30)
 
     signal_count = 0
-    for symbol, name in PAIRS:
-        if signal_count >= 5:
-            break
+    pair_index = 0
+
+    while signal_count < 5:
+        symbol, name = PAIRS[pair_index % len(PAIRS)]
+        pair_index += 1
 
         try:
             df = yf.download(symbol, period="7d", interval="15m")
-            if df.empty:
+            if df.empty or len(df) < 30:
                 continue
 
             # Calculate indicators
@@ -178,25 +177,24 @@ def run_session():
 
             signal = generate_signal(df)
 
-            if signal:
-                signal_count += 1
-                msg = (
-                    f"📢 *Signal {signal_count}/5*\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"💱 Pair: *{name}*\n"
-                    f"🎯 Direction: *{signal['direction']}*\n"
-                    f"⚡ Strategy: *{signal['strategy']}*\n"
-                    f"📝 Reason(s): {', '.join(signal['reasons'])}\n"
-                    f"⏰ Expiry: *15M*\n"
-                    f"━━━━━━━━━━━━━━━"
-                )
-                send_telegram_message(msg)
+            signal_count += 1
+            msg = (
+                f"📢 *Signal {signal_count}/5*\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"💱 Pair: *{name}*\n"
+                f"🎯 Direction: *{signal['direction']}*\n"
+                f"⚡ Strategy: *{signal['strategy']}*\n"
+                f"📝 Reason(s): {', '.join(signal['reasons'])}\n"
+                f"⏰ Expiry: *15M*\n"
+                f"━━━━━━━━━━━━━━━"
+            )
+            send_telegram_message(msg)
 
-                # Simulated result
-                time.sleep(60)
-                result = "✅ WIN" if signal_count % 2 == 0 else "❌ LOSE"
-                send_telegram_message(f"📊 Result for Signal {signal_count}: {result}")
-                time.sleep(60)
+            # Simulated result
+            time.sleep(60)
+            result = "✅ WIN" if signal_count % 2 == 0 else "❌ LOSE"
+            send_telegram_message(f"📊 Result for Signal {signal_count}: {result}")
+            time.sleep(60)
 
         except Exception as e:
             print(f"Error fetching {name}: {e}")
