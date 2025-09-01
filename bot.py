@@ -1,24 +1,23 @@
-# bot.py
-# GitHub Actions bot: picks signals and posts sessions to Telegram
+
 import os, time, sys, requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime
 
-# ---------------- CONFIG (do NOT hardcode secrets here) ----------------
+# ---------------- CONFIG ----------------
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-SESSION = os.environ.get("SESSION", "morning")   # set by workflow (morning/evening)
+SESSION = os.environ.get("SESSION", "morning")
 
 if not TOKEN or not CHAT_ID:
     print("ERROR: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set as repo secrets")
     sys.exit(1)
 
 # Behavior
-EXPIRY_SECONDS = 300           # 5 minutes expiry
+EXPIRY_SECONDS = 300            # 5 minutes expiry
 SIGNALS_PER_SESSION = 5
-SIGNAL_INTERVAL_SECONDS = 60   # 1 minute between sends
+START_DELAY_SECONDS = 30        # wait after "session starts" before first signal
+AFTER_RESULT_DELAY = 30         # wait after each result before next signal
 PAIRS = [
     ("EURUSD=X","EUR/USD"),
     ("GBPUSD=X","GBP/USD"),
@@ -29,16 +28,32 @@ PAIRS = [
     ("NZDUSD=X","NZD/USD"),
 ]
 
-# ---------------- Helpers ----------------
-def tg_send(text):
+# ---------------- Telegram ----------------
+def tg_send(text, parse_mode="HTML"):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     try:
-        r = requests.post(url, json={"chat_id": CHAT_ID, "text": text})
+        r = requests.post(url, json={
+            "chat_id": CHAT_ID,
+            "text": text,
+            "parse_mode": parse_mode,
+            "disable_web_page_preview": True
+        })
         if r.status_code != 200:
             print("Telegram send failed:", r.status_code, r.text)
     except Exception as e:
         print("Telegram error:", e)
 
+def stylish_greeting():
+    if SESSION.lower() == "morning":
+        tg_send("☀️ <b><i>Good Morning Family</i></b>")
+        time.sleep(1)
+        tg_send("<b>Morning session starts</b>\n\n📡 <b>MSL Binary Signal</b>")
+    else:
+        tg_send("🌙 <b><i>Good Evening Family</i></b>")
+        time.sleep(1)
+        tg_send("<b>Evening session starts</b>\n\n📡 <b>MSL Binary Signal</b>")
+
+# ---------------- Indicators ----------------
 def ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
 
@@ -70,14 +85,17 @@ def vortex(df, length=14):
     df["vi_minus"] = vi_minus
     return df
 
+# ---------------- Data & Signal ----------------
 def fetch_df(ticker, interval, period):
     try:
         df = yf.download(ticker, interval=interval, period=period, progress=False)
+        if df is None or df.empty:
+            print(f"[WARN] No data for {ticker} interval={interval}")
+            return None
     except Exception as e:
-        print("yfinance error for", ticker, interval, e)
+        print(f"[ERROR] yfinance error {ticker} {interval}: {e}")
         return None
-    if df is None or df.empty:
-        return None
+
     df = df.dropna().copy()
     df["EMA9"] = ema(df["Close"], 9)
     df["EMA21"] = ema(df["Close"], 21)
@@ -90,54 +108,45 @@ def score_from_df(df):
         return None
     c = df.iloc[-1]
     p = df.iloc[-2]
+
     ema_bull = (c.EMA9 > c.EMA21) and (p.EMA9 <= p.EMA21)
     ema_bear = (c.EMA9 < c.EMA21) and (p.EMA9 >= p.EMA21)
     rsi_up50 = (c.RSI14 > 50) and (p.RSI14 <= 50)
-    rsi_dn50 = (c.RSI14 < 50) and (p.RSI14 >= 50)
+    rsi_dn50 = (c.RSI14 < 50) and (p.RSI14 >= 50)   # fixed bug (was p.EMA21)
     vort_bull = c.vi_plus > c.vi_minus
     vort_bear = c.vi_plus < c.vi_minus
 
-    bull = int(bool(ema_bull)) + int(bool(rsi_up50)) + int(bool(vort_bull))
-    bear = int(bool(ema_bear)) + int(bool(rsi_dn50)) + int(bool(vort_bear))
+    bull = int(ema_bull) + int(rsi_up50) + int(vort_bull)
+    bear = int(ema_bear) + int(rsi_dn50) + int(vort_bear)
 
     gap = (c.EMA9 - c.EMA21) / max(abs(c.Close), 1e-9)
     vort_spread = (c.vi_plus - c.vi_minus)
 
     strength = (bull - bear) + (vort_spread * 0.3) + (gap * 200)
-    if strength > 0:
-        direction = "CALL"
-        used = []
-        if ema_bull: used.append("EMA")
-        if rsi_up50: used.append("RSI")
-        if vort_bull: used.append("Vortex")
-    else:
-        direction = "PUT"
-        used = []
-        if ema_bear: used.append("EMA")
-        if rsi_dn50: used.append("RSI")
-        if vort_bear: used.append("Vortex")
-    strategy = "+".join(used) if used else "EMA+RSI+Vortex"
-    return {"direction": direction, "strength": abs(float(strength)), "price": float(c.Close), "strategy": strategy}
+    direction = "CALL 🔼" if strength > 0 else "PUT 🔽"
+
+    used = []
+    if ema_bull or ema_bear: used.append("EMA")
+    if rsi_up50 or rsi_dn50: used.append("RSI")
+    if vort_bull or vort_bear: used.append("Vortex")
+
+    return {
+        "direction": direction,
+        "strength": abs(float(strength)),
+        "price": float(c.Close),
+        "strategy": "+".join(used) if used else "EMA+RSI+Vortex"
+    }
 
 def best_timeframe_signal(ticker):
-    # try 1m then 5m; compare strength
-    s1 = None; s5 = None
-    try:
-        d1 = fetch_df(ticker, "1m", "1d")
-        s1 = score_from_df(d1)
-    except Exception as e:
-        print("1m error", e)
-    try:
-        d5 = fetch_df(ticker, "5m", "5d")
-        s5 = score_from_df(d5)
-    except Exception as e:
-        print("5m error", e)
-    if s1 and s5:
-        return (s1, "1m") if s1["strength"] >= s5["strength"] else (s5, "5m")
-    if s1:
-        return (s1, "1m")
-    if s5:
-        return (s5, "5m")
+    # try 1m → 5m → fallback 15m
+    for interval, period in [("1m", "1d"), ("5m", "5d"), ("15m", "1mo")]:
+        try:
+            df = fetch_df(ticker, interval, period)
+            sig = score_from_df(df)
+            if sig:
+                return (sig, interval)
+        except Exception as e:
+            print(f"[ERROR] {ticker} {interval}: {e}")
     return (None, None)
 
 def latest_price(ticker):
@@ -150,83 +159,75 @@ def latest_price(ticker):
         print("latest price error", e)
         return None
 
-# ---------------- Session flow ----------------
-def run_session():
-    # Greeting + start
-    if SESSION.lower() == "morning":
-        tg_send("☀️ Good Morning Family")
-        time.sleep(60)
-        tg_send("Morning session starts")
-    else:
-        tg_send("🌙 Good Evening Family")
-        time.sleep(60)
-        tg_send("Evening session starts")
+# ---------------- Pretty formatting ----------------
+def format_signal_card(sig, expiry_minutes):
+    # Use <pre> to keep the box aligned in Telegram
+    return (
+        "<pre>"
+        "┏━━━━━━━━ SIGNAL ━━━━━━━━\n"
+        f"┃ Pair:      {sig['pair']}\n"
+        f"┃ Direction: {sig['direction']}\n"
+        f"┃ Expiry:    {expiry_minutes}m\n"
+        f"┃ Strategy:  {sig['strategy']} | TF: {sig.get('tf','?')}\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━"
+        "</pre>"
+    )
 
-    # Build strong candidate signals
+# ---------------- Session flow (sequential) ----------------
+def run_session():
+    stylish_greeting()
+    # Wait before first signal
+    time.sleep(START_DELAY_SECONDS)
+
+    # Build candidates
     candidates = []
     for yf_sym, nice in PAIRS:
         sig, tf = best_timeframe_signal(yf_sym)
-        if not sig:
-            continue
-        sig["yf"] = yf_sym
-        sig["pair"] = nice
-        sig["tf"] = tf
-        candidates.append(sig)
+        if sig:
+            sig["yf"] = yf_sym
+            sig["pair"] = nice
+            sig["tf"] = tf
+            candidates.append(sig)
+        else:
+            print(f"[INFO] No signal for {nice}")
 
     if not candidates:
-        tg_send("MSL Binary Signal\nPair: -\nDirection: -\nExpiry: -\nStrategy: No data")
-        tg_send(("Morning" if SESSION.lower()=="morning" else "Evening") + " session ends")
+        tg_send("⚠️ <b>No reliable signals found this session.</b>")
+        tg_send(("<b>Morning session ends</b>" if SESSION.lower()=="morning" else "<b>Evening session ends</b>") + " ✅")
         return
 
-    # choose top N unique pairs
+    # Top N unique pairs
     candidates.sort(key=lambda x: x["strength"], reverse=True)
-    used = set(); queue = []
+    queue, used = [], set()
     for c in candidates:
-        if c["pair"] in used: continue
-        queue.append(c); used.add(c["pair"])
-        if len(queue) >= SIGNALS_PER_SESSION: break
-    while len(queue) < SIGNALS_PER_SESSION and candidates:
-        queue.append(candidates[0])
+        if c["pair"] not in used:
+            queue.append(c); used.add(c["pair"])
+        if len(queue) >= SIGNALS_PER_SESSION:
+            break
 
-    # send signals spaced 1 minute apart, schedule checks
-    pending = []
+    # Sequential: send signal -> wait expiry -> send result -> wait 30s -> next
     for sig in queue:
-        header = "MSL Binary Signal"
-        body = f"Pair: {sig['pair']}\nDirection: {sig['direction']}\nExpiry: {int(EXPIRY_SECONDS/60)}m\nStrategy: {sig['strategy']} | TF: {sig.get('tf','?')}"
-        tg_send(header); time.sleep(0.5); tg_send(body)
+        # Send card
+        tg_send(format_signal_card(sig, int(EXPIRY_SECONDS/60)))
+        # Capture entry
         entry_price = latest_price(sig["yf"])
-        now_ts = time.time()
-        pending.append({"sig":sig, "entry":entry_price, "check_at": now_ts + EXPIRY_SECONDS})
-        time.sleep(SIGNAL_INTERVAL_SECONDS)
-
-    # wait and process pending results
-    while pending:
-        now_ts = time.time()
-        to_keep = []
-        for p in pending:
-            if now_ts >= p["check_at"]:
-                exit_price = latest_price(p["sig"]["yf"])
-                if p["entry"] is None or exit_price is None:
-                    tg_send("⚪ Result: NO_PRICE")
-                else:
-                    if p["sig"]["direction"] == "CALL":
-                        if exit_price > p["entry"]:
-                            tg_send("✅ Win\nCongratulation 🎊")
-                        else:
-                            tg_send("❌ Lose\nKeep studying and reviewing trades.")
-                    else:
-                        if exit_price < p["entry"]:
-                            tg_send("✅ Win\nCongratulation 🎊")
-                        else:
-                            tg_send("❌ Lose\nKeep studying and reviewing trades.")
+        # Wait expiry
+        time.sleep(EXPIRY_SECONDS)
+        # Check result
+        exit_price = latest_price(sig["yf"])
+        if entry_price is None or exit_price is None:
+            tg_send("⚪ <b>Result:</b> NO_PRICE")
+        else:
+            if ("CALL" in sig["direction"] and exit_price > entry_price) or \
+               ("PUT"  in sig["direction"] and exit_price < entry_price):
+                tg_send("✅ <b>Win</b>\nCongratulation 🎊")
             else:
-                to_keep.append(p)
-        pending = to_keep
-        if pending:
-            time.sleep(5)  # short sleep while waiting for next check
+                tg_send("❌ <b>Lose</b>\nKeep studying and reviewing trades.")
+        # Pause before next signal
+        time.sleep(AFTER_RESULT_DELAY)
 
-    # end session
-    tg_send(("Morning" if SESSION.lower()=="morning" else "Evening") + " session ends")
+    # End
+    tg_send(("<b>Morning session ends</b>" if SESSION.lower()=="morning" else "<b>Evening session ends</b>") + " ✅")
 
 if __name__ == "__main__":
     run_session()
