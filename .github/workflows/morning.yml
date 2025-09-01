@@ -1,8 +1,8 @@
-name: MSL Evening Signals
+name: MSL Morning Signals
 
 on:
   schedule:
-    - cron: "0 16 * * *"  # 16:00 UTC = 17:00 Africa/Lagos
+    - cron: "0 9 * * *"   # 09:00 UTC = 10:00 Africa/Lagos
   workflow_dispatch:
 
 jobs:
@@ -24,9 +24,9 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      - name: Run evening session
+      - name: Run morning session
         run: python bot.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          SESSION: evening
+          SESSION: morning
