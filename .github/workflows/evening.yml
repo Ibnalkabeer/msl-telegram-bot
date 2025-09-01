@@ -18,8 +18,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install yfinance pandas numpy requests
       - name: Run evening session
+        run: python bot.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SESSION: evening
-        run: python bot.py
