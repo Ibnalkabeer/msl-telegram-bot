@@ -3,29 +3,72 @@ import time
 import requests
 import yfinance as yf
 import pandas as pd
+import math
 
-# ==============================
-# Telegram Setup
-# ==============================
+# -----------------------------
+# CONFIG
+# -----------------------------
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    try:
-        requests.post(url, json=payload)
-    except Exception as e:
-        print(f"Error sending message: {e}")
+# Safety: require secrets
+if not BOT_TOKEN or not CHAT_ID:
+    print("ERROR: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set as repo secrets")
+    raise SystemExit(1)
 
-# ==============================
+# Behavior / timing (tweak these if you want)
+EXPIRY_SECONDS = 60            # expiry (1 minute)
+AFTER_RESULT_DELAY = 60        # wait after showing result before next signal
+START_DELAY_SECONDS = 30       # wait after "session starts" before first signal
+SIGNALS_PER_SESSION = 5
+MAX_ATTEMPTS = 50              # stop if we can't find enough pairs (prevents infinite loop)
+YF_PERIOD = "1d"               # how much history to request
+YF_INTERVAL = "1m"             # fast intraday data
+
+# -----------------------------
+# Pairs - mostly forex + gold (avoid unreliable intraday tickers)
+# -----------------------------
+PAIRS = [
+    ("EURUSD=X","EUR/USD"), ("GBPUSD=X","GBP/USD"), ("USDJPY=X","USD/JPY"),
+    ("AUDUSD=X","AUD/USD"), ("USDCHF=X","USD/CHF"), ("USDCAD=X","USD/CAD"),
+    ("NZDUSD=X","NZD/USD"), ("EURJPY=X","EUR/JPY"), ("GBPJPY=X","GBP/JPY"),
+    ("AUDJPY=X","AUD/JPY"), ("EURGBP=X","EUR/GBP"), ("EURAUD=X","EUR/AUD"),
+    ("CADJPY=X","CAD/JPY"), ("CHFJPY=X","CHF/JPY"), ("NZDJPY=X","NZD/JPY"),
+    ("GC=F","Gold")
+]
+
+# -----------------------------
+# Telegram helper (HTML)
+# -----------------------------
+def send_telegram_message(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=15)
+        if r.status_code != 200:
+            print("Telegram send failed:", r.status_code, r.text)
+    except Exception as e:
+        print("Telegram error:", e)
+
+# -----------------------------
 # Indicators
-# ==============================
+# -----------------------------
+def safe_div(a, b):
+    try:
+        return a / b
+    except Exception:
+        return float("nan")
+
 def rsi(df, period=14):
     delta = df["Close"].diff()
     gain = delta.where(delta > 0, 0).rolling(period).mean()
     loss = -delta.where(delta < 0, 0).rolling(period).mean()
-    rs = gain / loss
+    rs = safe_div(gain, loss)
     df["rsi"] = 100 - (100 / (1 + rs))
     return df
 
@@ -39,7 +82,8 @@ def macd(df):
 def stochastic(df, k=14, d=3):
     low_min = df["Low"].rolling(k).min()
     high_max = df["High"].rolling(k).max()
-    df["stoch_k"] = 100 * ((df["Close"] - low_min) / (high_max - low_min))
+    denom = (high_max - low_min).replace(0, float("nan"))
+    df["stoch_k"] = 100 * ((df["Close"] - low_min) / denom)
     df["stoch_d"] = df["stoch_k"].rolling(d).mean()
     return df
 
@@ -48,22 +92,18 @@ def vortex(df, length=14):
     prev_close = close.shift(1)
     prev_low = low.shift(1)
     prev_high = high.shift(1)
-
     tr = pd.concat([
         (high - low).abs(),
         (high - prev_close).abs(),
         (low - prev_close).abs()
     ], axis=1).max(axis=1)
-
     vp = (high - prev_low).abs()
     vm = (low - prev_high).abs()
-
-    sumTR = tr.rolling(length).sum()
+    sumTR = tr.rolling(length).sum().replace(0, float("nan"))
     sumVP = vp.rolling(length).sum()
     sumVM = vm.rolling(length).sum()
-
-    df["vi_plus"] = (sumVP / sumTR).fillna(1.0)
-    df["vi_minus"] = (sumVM / sumTR).fillna(1.0)
+    df["vi_plus"] = safe_div(sumVP, sumTR).fillna(1.0)
+    df["vi_minus"] = safe_div(sumVM, sumTR).fillna(1.0)
     return df
 
 def ema(df):
@@ -78,96 +118,135 @@ def bollinger(df, period=20):
     df["lower_bb"] = df["sma"] - (df["stddev"] * 2)
     return df
 
-# ==============================
-# Strategy Rotation
-# ==============================
+# -----------------------------
+# Strategy rotation
+# -----------------------------
 STRATEGIES = ["RSI", "MACD", "STOCHASTIC", "VORTEX", "EMA", "BOLLINGER"]
 strategy_index = 0
 
 def generate_signal(df):
-    """Rotate through strategies and always return a signal."""
+    """Use current strategy (rotating) and always return a direction + reasons."""
     global strategy_index
     latest = df.iloc[-1]
-    strategy = STRATEGIES[strategy_index % len(STRATEGIES)]
-    signal, reasons = None, []
+    strat = STRATEGIES[strategy_index % len(STRATEGIES)]
+    direction = None
+    reasons = []
 
-    if strategy == "RSI":
-        if latest["rsi"] < 40:
-            signal, reasons = "CALL 📈", ["RSI oversold (<40)"]
-        elif latest["rsi"] > 60:
-            signal, reasons = "PUT 📉", ["RSI overbought (>60)"]
-        else:
-            signal, reasons = "CALL 📈", ["RSI neutral → bias upward"]
+    # RSS/logic with safe getters
+    r = float(latest.get("rsi", float("nan"))) if not pd.isna(latest.get("rsi", None)) else math.nan
+    mac = float(latest.get("macd", math.nan))
+    mac_sig = float(latest.get("signal", math.nan))
+    sk = float(latest.get("stoch_k", math.nan))
+    sd = float(latest.get("stoch_d", math.nan))
+    vplus = float(latest.get("vi_plus", math.nan))
+    vminus = float(latest.get("vi_minus", math.nan))
+    ema20 = float(latest.get("ema20", math.nan))
+    ema50 = float(latest.get("ema50", math.nan))
+    close = float(latest.get("Close", math.nan))
+    lower_bb = float(latest.get("lower_bb", math.nan)) if "lower_bb" in latest else math.nan
+    upper_bb = float(latest.get("upper_bb", math.nan)) if "upper_bb" in latest else math.nan
 
-    elif strategy == "MACD":
-        if latest["macd"] > latest["signal"]:
-            signal, reasons = "CALL 📈", ["MACD bullish crossover"]
+    if strat == "RSI":
+        if r < 40:
+            direction = "CALL 📈"; reasons = ["RSI oversold (<40)"]
+        elif r > 60:
+            direction = "PUT 📉"; reasons = ["RSI overbought (>60)"]
         else:
-            signal, reasons = "PUT 📉", ["MACD bearish crossover"]
+            direction = "CALL 📈"; reasons = ["RSI neutral → slight CALL bias"]
 
-    elif strategy == "STOCHASTIC":
-        if latest["stoch_k"] < 30 and latest["stoch_d"] < 30:
-            signal, reasons = "CALL 📈", ["Stochastic oversold (<30)"]
-        elif latest["stoch_k"] > 70 and latest["stoch_d"] > 70:
-            signal, reasons = "PUT 📉", ["Stochastic overbought (>70)"]
+    elif strat == "MACD":
+        if mac > mac_sig:
+            direction = "CALL 📈"; reasons = ["MACD > signal"]
         else:
-            signal, reasons = "PUT 📉", ["Stochastic neutral → bias downward"]
+            direction = "PUT 📉"; reasons = ["MACD < signal"]
 
-    elif strategy == "VORTEX":
-        if latest["vi_plus"] > latest["vi_minus"]:
-            signal, reasons = "CALL 📈", ["Vortex bullish (+VI > -VI)"]
+    elif strat == "STOCHASTIC":
+        if sk < 30 and sd < 30:
+            direction = "CALL 📈"; reasons = ["Stochastic oversold (<30)"]
+        elif sk > 70 and sd > 70:
+            direction = "PUT 📉"; reasons = ["Stochastic overbought (>70)"]
         else:
-            signal, reasons = "PUT 📉", ["Vortex bearish (+VI < -VI)"]
+            direction = "CALL 📈"; reasons = ["Stochastic neutral → CALL bias"]
 
-    elif strategy == "EMA":
-        if latest["ema20"] > latest["ema50"]:
-            signal, reasons = "CALL 📈", ["EMA20 above EMA50 (bullish)"]
+    elif strat == "VORTEX":
+        if vplus > vminus:
+            direction = "CALL 📈"; reasons = ["Vortex +VI > -VI"]
         else:
-            signal, reasons = "PUT 📉", ["EMA20 below EMA50 (bearish)"]
+            direction = "PUT 📉"; reasons = ["Vortex +VI < -VI"]
 
-    elif strategy == "BOLLINGER":
-        if latest["Close"] <= latest["lower_bb"]:
-            signal, reasons = "CALL 📈", ["Price at lower Bollinger band"]
-        elif latest["Close"] >= latest["upper_bb"]:
-            signal, reasons = "PUT 📉", ["Price at upper Bollinger band"]
+    elif strat == "EMA":
+        if ema20 > ema50:
+            direction = "CALL 📈"; reasons = ["EMA20 > EMA50 (bullish)"]
         else:
-            signal, reasons = "CALL 📈", ["Price mid-BB → bias upward"]
+            direction = "PUT 📉"; reasons = ["EMA20 < EMA50 (bearish)"]
+
+    elif strat == "BOLLINGER":
+        if not math.isnan(lower_bb) and close <= lower_bb:
+            direction = "CALL 📈"; reasons = ["Price at/below lower Bollinger band"]
+        elif not math.isnan(upper_bb) and close >= upper_bb:
+            direction = "PUT 📉"; reasons = ["Price at/above upper Bollinger band"]
+        else:
+            direction = "CALL 📈"; reasons = ["Price mid-BB → CALL bias"]
 
     strategy_index += 1
-    return {"direction": signal, "strategy": strategy, "reasons": reasons}
+    return {"direction": direction, "strategy": strat, "reasons": reasons}
 
-# ==============================
-# Assets (Expanded List)
-# ==============================
-PAIRS = [
-    ("EURUSD=X","EUR/USD"), ("GBPUSD=X","GBP/USD"), ("USDJPY=X","USD/JPY"),
-    ("AUDUSD=X","AUD/USD"), ("USDCHF=X","USD/CHF"), ("USDCAD=X","USD/CAD"),
-    ("NZDUSD=X","NZD/USD"), ("EURJPY=X","EUR/JPY"), ("GBPJPY=X","GBP/JPY"),
-    ("AUDJPY=X","AUD/JPY"), ("EURGBP=X","EUR/GBP"), ("EURAUD=X","EUR/AUD"),
-    ("CADJPY=X","CAD/JPY"), ("CHFJPY=X","CHF/JPY"), ("NZDJPY=X","NZD/JPY"),
-    ("GC=F","Gold"), ("SI=F","Silver"), ("^GSPC","S&P 500"), ("^NDX","NASDAQ"),
-]
+# -----------------------------
+# Helper: get latest price (1m)
+# -----------------------------
+def latest_price(ticker):
+    try:
+        df = yf.download(ticker, period="1d", interval="1m", progress=False)
+        if df is None or df.empty:
+            return None
+        return float(df["Close"].iloc[-1])
+    except Exception as e:
+        print("latest_price error:", e)
+        return None
 
-# ==============================
-# Main Execution
-# ==============================
-def run_session():
-    send_telegram_message("🌞✨ *Good Morning Family* ✨🌞\n\n🎯 *MSL Binary Signal* 🎯\n━━━━━━━━━━━━━━━\n📊 Morning Session starts now!")
-    time.sleep(30)
+# -----------------------------
+# Pretty format for signal
+# -----------------------------
+def format_signal_card(n, pair_name, sig, expiry_mins):
+    reasons = ", ".join(sig.get("reasons", [])) if sig else ""
+    return (
+        f"<pre>"
+        f"┏━━━━━━━━ SIGNAL ━━━━━━━━\n"
+        f"┃ Signal: {n}/{SIGNALS_PER_SESSION}\n"
+        f"┃ Pair:   {pair_name}\n"
+        f"┃ Dir:    {sig.get('direction')}\n"
+        f"┃ Expiry: {expiry_mins}m\n"
+        f"┃ Strat:  {sig.get('strategy')} \n"
+        f"┃ Note:   {reasons}\n"
+        f"┗━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"</pre>"
+    )
+
+# -----------------------------
+# Main session runner
+# -----------------------------
+def run_session(session_name="Morning"):
+    # Header
+    send_telegram_message(f"☀️ <b>Good {session_name} Family</b>\n\n📡 <b>MSL Binary Signal</b>\n<b>{session_name} session starts</b>")
+    time.sleep(START_DELAY_SECONDS)
 
     signal_count = 0
     pair_index = 0
+    attempts = 0
 
-    while signal_count < 5:
-        symbol, name = PAIRS[pair_index % len(PAIRS)]
+    while signal_count < SIGNALS_PER_SESSION and attempts < MAX_ATTEMPTS:
+        attempts += 1
+        symbol, nice = PAIRS[pair_index % len(PAIRS)]
         pair_index += 1
 
         try:
-            df = yf.download(symbol, period="7d", interval="15m")
-            if df.empty or len(df) < 30:
+            # fetch 1m intraday data for the last day
+            df = yf.download(symbol, period=YF_PERIOD, interval=YF_INTERVAL, progress=False)
+            if df is None or df.empty or len(df) < 20:
+                print(f"[WARN] No usable data for {nice} ({symbol}), len={0 if df is None else len(df)}")
                 continue
 
-            # Calculate indicators
+            # compute indicators (will add columns, may produce NaNs at top)
             df = rsi(df)
             df = macd(df)
             df = stochastic(df)
@@ -175,31 +254,59 @@ def run_session():
             df = ema(df)
             df = bollinger(df)
 
-            signal = generate_signal(df)
+            # ensure latest row has required columns
+            if df.empty or len(df) < 20:
+                print(f"[WARN] After indicators, no data for {nice}")
+                continue
+
+            sig = generate_signal(df)
+
+            # capture entry price (latest)
+            entry = latest_price(symbol)
+            entry_text = f"{entry:.5f}" if entry is not None and not math.isnan(entry) else "NO_PRICE"
 
             signal_count += 1
-            msg = (
-                f"📢 *Signal {signal_count}/5*\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"💱 Pair: *{name}*\n"
-                f"🎯 Direction: *{signal['direction']}*\n"
-                f"⚡ Strategy: *{signal['strategy']}*\n"
-                f"📝 Reason(s): {', '.join(signal['reasons'])}\n"
-                f"⏰ Expiry: *15M*\n"
-                f"━━━━━━━━━━━━━━━"
-            )
-            send_telegram_message(msg)
+            # send nicely formatted card
+            card = format_signal_card(signal_count, nice, sig, expiry_mins=1)
+            send_telegram_message(card)
+            # send a compact body with entry price
+            send_telegram_message(f"<b>Entry:</b> {entry_text}   ⏱️ Expiry: 1m   <b>Strategy:</b> {sig.get('strategy')}")
 
-            # Simulated result
-            time.sleep(60)
-            result = "✅ WIN" if signal_count % 2 == 0 else "❌ LOSE"
-            send_telegram_message(f"📊 Result for Signal {signal_count}: {result}")
-            time.sleep(60)
+            # wait expiry and then compute result
+            time.sleep(EXPIRY_SECONDS + 1)  # small buffer
+            exit_price = latest_price(symbol)
+            if entry is None or exit_price is None:
+                send_telegram_message("⚪ <b>Result:</b> NO_PRICE (couldn't fetch entry or exit price)")
+            else:
+                win = None
+                dir_text = sig.get("direction", "")
+                # check CALL/PUT
+                if "CALL" in dir_text:
+                    win = exit_price > entry
+                elif "PUT" in dir_text:
+                    win = exit_price < entry
+                else:
+                    win = False
+
+                if win:
+                    send_telegram_message("✅ <b>Win</b>\nCongratulation 🎊")
+                else:
+                    send_telegram_message("❌ <b>Lose</b>\nKeep studying and reviewing trades.")
+
+            # pause after result before next signal
+            time.sleep(AFTER_RESULT_DELAY)
 
         except Exception as e:
-            print(f"Error fetching {name}: {e}")
+            print(f"[ERROR] fetching/processing {nice}: {e}")
+            # continue trying other pairs
 
-    send_telegram_message("\n✅ Morning session ends")
+    # end session
+    send_telegram_message(f"✅ <b>{session_name} session ends</b>")
 
+# -----------------------------
+# Entrypoint
+# -----------------------------
 if __name__ == "__main__":
-    run_session()
+    # Default uses "Morning" — your workflows set SESSION env if you want "Evening"
+    sess = os.environ.get("SESSION", "Morning")
+    run_session(session_name=sess)
