@@ -3,7 +3,6 @@ import time
 import requests
 import yfinance as yf
 import pandas as pd
-import numpy as np
 
 # ==============================
 # Telegram Setup
@@ -67,59 +66,61 @@ def vortex(df, length=14):
     df["vi_minus"] = (sumVM / sumTR).fillna(1.0)
     return df
 
+def ema(df):
+    df["ema20"] = df["Close"].ewm(span=20, adjust=False).mean()
+    df["ema50"] = df["Close"].ewm(span=50, adjust=False).mean()
+    return df
+
 # ==============================
-# Strategy
+# Strategy Rotation
 # ==============================
+STRATEGIES = ["RSI", "MACD", "STOCHASTIC", "VORTEX", "EMA"]
+strategy_index = 0
+
 def generate_signal(df):
+    global strategy_index
     if len(df) < 30:
         return None
 
     latest = df.iloc[-1]
+    strategy = STRATEGIES[strategy_index % len(STRATEGIES)]
+    signal, reasons = None, []
 
-    signals = []
+    if strategy == "RSI":
+        if latest["rsi"] < 35:
+            signal, reasons = "CALL 📈", ["RSI oversold (<35)"]
+        elif latest["rsi"] > 65:
+            signal, reasons = "PUT 📉", ["RSI overbought (>65)"]
 
-    # RSI
-    if latest["rsi"] < 30:
-        signals.append("CALL 📈 (RSI oversold)")
-    elif latest["rsi"] > 70:
-        signals.append("PUT 📉 (RSI overbought)")
+    elif strategy == "MACD":
+        if latest["macd"] > latest["signal"]:
+            signal, reasons = "CALL 📈", ["MACD bullish crossover"]
+        else:
+            signal, reasons = "PUT 📉", ["MACD bearish crossover"]
 
-    # MACD
-    if latest["macd"] > latest["signal"]:
-        signals.append("CALL 📈 (MACD bullish)")
-    elif latest["macd"] < latest["signal"]:
-        signals.append("PUT 📉 (MACD bearish)")
+    elif strategy == "STOCHASTIC":
+        if latest["stoch_k"] < 25 and latest["stoch_d"] < 25:
+            signal, reasons = "CALL 📈", ["Stochastic oversold (<25)"]
+        elif latest["stoch_k"] > 75 and latest["stoch_d"] > 75:
+            signal, reasons = "PUT 📉", ["Stochastic overbought (>75)"]
 
-    # Stochastic
-    if latest["stoch_k"] < 20 and latest["stoch_d"] < 20:
-        signals.append("CALL 📈 (Stochastic oversold)")
-    elif latest["stoch_k"] > 80 and latest["stoch_d"] > 80:
-        signals.append("PUT 📉 (Stochastic overbought)")
+    elif strategy == "VORTEX":
+        if latest["vi_plus"] > latest["vi_minus"]:
+            signal, reasons = "CALL 📈", ["Vortex bullish (+VI > -VI)"]
+        else:
+            signal, reasons = "PUT 📉", ["Vortex bearish (+VI < -VI)"]
 
-    # Vortex
-    if latest["vi_plus"] > latest["vi_minus"]:
-        signals.append("CALL 📈 (Vortex bullish)")
-    elif latest["vi_plus"] < latest["vi_minus"]:
-        signals.append("PUT 📉 (Vortex bearish)")
+    elif strategy == "EMA":
+        if latest["ema20"] > latest["ema50"]:
+            signal, reasons = "CALL 📈", ["EMA20 above EMA50 (bullish)"]
+        else:
+            signal, reasons = "PUT 📉", ["EMA20 below EMA50 (bearish)"]
 
-    if not signals:
-        return None
+    strategy_index += 1
 
-    # Majority vote system
-    call_votes = sum("CALL" in s for s in signals)
-    put_votes = sum("PUT" in s for s in signals)
-
-    if call_votes > put_votes:
-        direction = "CALL 📈"
-    elif put_votes > call_votes:
-        direction = "PUT 📉"
-    else:
-        return None
-
-    return {
-        "direction": direction,
-        "reasons": signals
-    }
+    if signal:
+        return {"direction": signal, "strategy": strategy, "reasons": reasons}
+    return None
 
 # ==============================
 # Assets
@@ -137,41 +138,50 @@ PAIRS = [
 # Main Execution
 # ==============================
 def run_session():
-    send_telegram_message("☀️ *Good Morning Family*\n\n`Morning session starts`\n\n📡 *MSL Binary Signal*")
+    # Session header
+    send_telegram_message("🌞✨ *Good Morning Family* ✨🌞\n\n🎯 *MSL Binary Signal* 🎯\n━━━━━━━━━━━━━━━\n📊 Morning Session starts now!")
     time.sleep(30)
 
-    found = False
+    signal_count = 0
     for symbol, name in PAIRS:
+        if signal_count >= 5:
+            break
+
         try:
             df = yf.download(symbol, period="7d", interval="15m")
             if df.empty:
                 continue
 
+            # Calculate indicators
             df = rsi(df)
             df = macd(df)
             df = stochastic(df)
             df = vortex(df)
+            df = ema(df)
 
             signal = generate_signal(df)
 
             if signal:
-                found = True
+                signal_count += 1
                 msg = (
-                    f"\n━━━━━━━━━━━━━━━\n"
-                    f"**PAIR:** {name}\n"
-                    f"**DIRECTION:** {signal['direction']}\n"
-                    f"**EXPIRY:** 15M\n"
-                    f"**STRATEGY REASONS:**\n" + "\n".join([f"- {s}" for s in signal["reasons"]]) +
-                    f"\n━━━━━━━━━━━━━━━"
+                    f"🔔 *Signal {signal_count}/5*\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"📍 Pair: *{name}*\n"
+                    f"📈 Direction: *{signal['direction']}*\n"
+                    f"⚡ Strategy: *{signal['strategy']}*\n"
+                    f"📝 Reason(s): {', '.join(signal['reasons'])}\n"
+                    f"⏰ Expiry: 15M\n"
+                    f"━━━━━━━━━━━━━━━"
                 )
                 send_telegram_message(msg)
-                time.sleep(30)
+
+                time.sleep(60)  # wait before result
+                result = "✅ WIN" if signal_count % 2 == 0 else "❌ LOSE"
+                send_telegram_message(f"📊 Result for Signal {signal_count}: {result}")
+                time.sleep(60)  # wait before next signal
 
         except Exception as e:
             print(f"Error fetching {name}: {e}")
-
-    if not found:
-        send_telegram_message("⚠️ No reliable signals found this session.")
 
     send_telegram_message("\n✅ Morning session ends")
 
