@@ -1,4 +1,4 @@
-# signal_bot.py
+# bot.py
 # GitHub Actions bot: picks signals and posts sessions to Telegram
 import os, time, sys, requests
 import pandas as pd
