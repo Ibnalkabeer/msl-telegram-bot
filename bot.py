@@ -78,6 +78,7 @@ STRATEGIES = ["RSI", "MACD", "STOCHASTIC", "VORTEX", "EMA"]
 strategy_index = 0
 
 def generate_signal(df):
+    """Rotate through strategies and always return a signal."""
     global strategy_index
     if len(df) < 30:
         return None
@@ -87,10 +88,10 @@ def generate_signal(df):
     signal, reasons = None, []
 
     if strategy == "RSI":
-        if latest["rsi"] < 35:
-            signal, reasons = "CALL 📈", ["RSI oversold (<35)"]
-        elif latest["rsi"] > 65:
-            signal, reasons = "PUT 📉", ["RSI overbought (>65)"]
+        if latest["rsi"] < 40:
+            signal, reasons = "CALL 📈", ["RSI oversold (<40)"]
+        elif latest["rsi"] > 60:
+            signal, reasons = "PUT 📉", ["RSI overbought (>60)"]
 
     elif strategy == "MACD":
         if latest["macd"] > latest["signal"]:
@@ -99,10 +100,13 @@ def generate_signal(df):
             signal, reasons = "PUT 📉", ["MACD bearish crossover"]
 
     elif strategy == "STOCHASTIC":
-        if latest["stoch_k"] < 25 and latest["stoch_d"] < 25:
-            signal, reasons = "CALL 📈", ["Stochastic oversold (<25)"]
-        elif latest["stoch_k"] > 75 and latest["stoch_d"] > 75:
-            signal, reasons = "PUT 📉", ["Stochastic overbought (>75)"]
+        if latest["stoch_k"] < 30 and latest["stoch_d"] < 30:
+            signal, reasons = "CALL 📈", ["Stochastic oversold (<30)"]
+        elif latest["stoch_k"] > 70 and latest["stoch_d"] > 70:
+            signal, reasons = "PUT 📉", ["Stochastic overbought (>70)"]
+        else:
+            # fallback
+            signal, reasons = "CALL 📈", ["Stochastic neutral → bias upward"]
 
     elif strategy == "VORTEX":
         if latest["vi_plus"] > latest["vi_minus"]:
@@ -117,10 +121,7 @@ def generate_signal(df):
             signal, reasons = "PUT 📉", ["EMA20 below EMA50 (bearish)"]
 
     strategy_index += 1
-
-    if signal:
-        return {"direction": signal, "strategy": strategy, "reasons": reasons}
-    return None
+    return {"direction": signal, "strategy": strategy, "reasons": reasons}
 
 # ==============================
 # Assets
@@ -164,21 +165,22 @@ def run_session():
             if signal:
                 signal_count += 1
                 msg = (
-                    f"🔔 *Signal {signal_count}/5*\n"
+                    f"📢 *Signal {signal_count}/5*\n"
                     f"━━━━━━━━━━━━━━━\n"
-                    f"📍 Pair: *{name}*\n"
-                    f"📈 Direction: *{signal['direction']}*\n"
+                    f"💱 Pair: *{name}*\n"
+                    f"🎯 Direction: *{signal['direction']}*\n"
                     f"⚡ Strategy: *{signal['strategy']}*\n"
                     f"📝 Reason(s): {', '.join(signal['reasons'])}\n"
-                    f"⏰ Expiry: 15M\n"
+                    f"⏰ Expiry: *15M*\n"
                     f"━━━━━━━━━━━━━━━"
                 )
                 send_telegram_message(msg)
 
-                time.sleep(60)  # wait before result
+                # Simulated trade result
+                time.sleep(60)
                 result = "✅ WIN" if signal_count % 2 == 0 else "❌ LOSE"
                 send_telegram_message(f"📊 Result for Signal {signal_count}: {result}")
-                time.sleep(60)  # wait before next signal
+                time.sleep(60)
 
         except Exception as e:
             print(f"Error fetching {name}: {e}")
