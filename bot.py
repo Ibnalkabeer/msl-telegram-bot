@@ -7,8 +7,8 @@ import yfinance as yf
 from datetime import datetime
 
 # ---------------- CONFIG (do NOT hardcode secrets here) ----------------
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+TOKEN = os.environ.get("8242858161:AAGoZKbWTZbmE51iFudvIDjDFQBfmNdRg0c")
+CHAT_ID = os.environ.get("-1002563699387")
 SESSION = os.environ.get("SESSION", "morning")   # set by workflow (morning/evening)
 
 if not TOKEN or not CHAT_ID:
