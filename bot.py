@@ -80,7 +80,14 @@ strategies = [ema_strategy, rsi_strategy, bb_strategy, macd_strategy]
 
 # 🔄 Session Runner
 def run_session(session_name):
-    send_msg("☀️ *Good Morning Family* ☀️\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Morning session starts now!")
+    if session_name == "evening":
+        send_msg("🌙 *Good Evening Family* 🌙\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Evening session starts now!")
+    else:
+        send_msg("🌞 *Good Morning Family* 🌞\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Morning session starts now!")
+
+    # Wait 30 sec before first signal
+    time.sleep(30)
+
     signals_sent = 0
     strat_index = 0
 
@@ -121,9 +128,13 @@ def run_session(session_name):
         send_msg(f"📊 *Result for Signal {signals_sent+1}:* {result}")
 
         signals_sent += 1
-        time.sleep(2)  # short gap before next signal
+        time.sleep(30)  # 30 sec gap before next signal
 
-    send_msg("✅ Morning session ends")
+    if session_name == "evening":
+        send_msg("✅ Evening session ends")
+    else:
+        send_msg("✅ Morning session ends")
 
 if __name__ == "__main__":
-    run_session("morning")
+    session = os.getenv("SESSION", "morning")  # pick from env, default morning
+    run_session(session)
