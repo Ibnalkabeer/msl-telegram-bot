@@ -1,6 +1,5 @@
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import time
 import requests
 import random
@@ -28,7 +27,12 @@ def send_msg(text):
 def get_data(symbol):
     try:
         df = yf.download(symbol, interval="1m", period="1d")
-        if df.empty: return None
+        if df.empty:
+            df = yf.download(symbol, interval="5m", period="5d")
+        if df.empty:
+            return None
+
+        # Indicators
         df["EMA5"] = df["Close"].ewm(span=5, adjust=False).mean()
         df["EMA10"] = df["Close"].ewm(span=10, adjust=False).mean()
         delta = df["Close"].diff()
@@ -40,7 +44,8 @@ def get_data(symbol):
         df["Upper"] = df["Middle"] + 2 * df["Close"].rolling(20).std()
         df["Lower"] = df["Middle"] - 2 * df["Close"].rolling(20).std()
         return df
-    except:
+    except Exception as e:
+        print("Error fetching data:", e)
         return None
 
 # 🎯 Strategies
@@ -82,8 +87,8 @@ def run_session(session_name):
     while signals_sent < 5:
         symbol, name = random.choice(pairs)
         df = get_data(symbol)
-        if df is None: 
-            time.sleep(30)
+        if df is None:
+            time.sleep(10)
             continue
 
         strategy = strategies[strat_index % len(strategies)]
@@ -91,13 +96,13 @@ def run_session(session_name):
         signal = strategy(df)
 
         if not signal:
-            # ✅ Fallback forced signal
+            # ✅ Always fallback
             signal = random.choice(["CALL", "PUT"])
 
         emoji = "🟢📈" if signal == "CALL" else "🔴📉"
         msg = f"""
 ━━━━━━━━━━━━━━━
-💹 *Signal {signals_sent+1}*
+💹 *Signal {signals_sent+1}/5*
 💱 Pair: *{name}*
 📍 Direction: *{signal}* {emoji}
 ⏳ Expiry: 1 Minute
@@ -106,7 +111,9 @@ def run_session(session_name):
 """
         send_msg(msg)
         signals_sent += 1
-        time.sleep(60)  # 1 min gap between signals
+
+        # Wait 1 minute between signals
+        time.sleep(60)
 
     send_msg("✅ Morning session ends")
 
