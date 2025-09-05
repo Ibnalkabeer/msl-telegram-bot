@@ -1,5 +1,6 @@
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import time
 import requests
 import random
@@ -13,26 +14,25 @@ pairs = [
     ("GBPUSD=X","GBP/USD"),
     ("USDJPY=X","USD/JPY"),
     ("AUDUSD=X","AUD/USD"),
-    ("USDCHF=X","USD/CHF"),
-    ("USDCAD=X","USD/CAD"),
-    ("NZDUSD=X","NZD/USD")
+    ("BTC-USD","BTC/USD"),
+    ("ETH-USD","ETH/USD")
 ]
 
 # 📡 Telegram sender
 def send_msg(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
+    try:
+        requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
+    except Exception as e:
+        print("Telegram error:", e)
 
-# 📊 Indicators
+# 📊 Data fetcher
 def get_data(symbol):
     try:
         df = yf.download(symbol, interval="1m", period="1d")
         if df.empty:
-            df = yf.download(symbol, interval="5m", period="5d")
-        if df.empty:
+            print(f"[WARN] No data for {symbol}")
             return None
-
-        # Indicators
         df["EMA5"] = df["Close"].ewm(span=5, adjust=False).mean()
         df["EMA10"] = df["Close"].ewm(span=10, adjust=False).mean()
         delta = df["Close"].diff()
@@ -45,7 +45,7 @@ def get_data(symbol):
         df["Lower"] = df["Middle"] - 2 * df["Close"].rolling(20).std()
         return df
     except Exception as e:
-        print("Error fetching data:", e)
+        print("Data fetch error:", e)
         return None
 
 # 🎯 Strategies
@@ -87,33 +87,41 @@ def run_session(session_name):
     while signals_sent < 5:
         symbol, name = random.choice(pairs)
         df = get_data(symbol)
+
         if df is None:
-            time.sleep(10)
-            continue
-
-        strategy = strategies[strat_index % len(strategies)]
-        strat_index += 1
-        signal = strategy(df)
-
-        if not signal:
-            # ✅ Always fallback
             signal = random.choice(["CALL", "PUT"])
+            strategy_used = "RandomFallback"
+        else:
+            strategy = strategies[strat_index % len(strategies)]
+            strat_index += 1
+            signal = strategy(df)
+            if not signal:
+                signal = random.choice(["CALL", "PUT"])
+                strategy_used = "RandomFallback"
+            else:
+                strategy_used = strategy.__name__.replace("_"," ").title()
 
         emoji = "🟢📈" if signal == "CALL" else "🔴📉"
         msg = f"""
 ━━━━━━━━━━━━━━━
-💹 *Signal {signals_sent+1}/5*
+💹 *Signal {signals_sent+1}*
 💱 Pair: *{name}*
 📍 Direction: *{signal}* {emoji}
 ⏳ Expiry: 1 Minute
-🧠 Strategy: {strategy.__name__.replace("_"," ").title()}
+🧠 Strategy: {strategy_used}
 ━━━━━━━━━━━━━━━
 """
         send_msg(msg)
-        signals_sent += 1
 
-        # Wait 1 minute between signals
+        # wait expiry time
         time.sleep(60)
+
+        # Simulated result
+        result = random.choice(["✅ WIN 🎉", "❌ LOSS 😢"])
+        send_msg(f"📊 *Result for Signal {signals_sent+1}:* {result}")
+
+        signals_sent += 1
+        time.sleep(2)  # short gap before next signal
 
     send_msg("✅ Morning session ends")
 
