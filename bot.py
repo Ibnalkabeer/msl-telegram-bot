@@ -83,7 +83,7 @@ def run_session(session_name):
     else:
         send_msg("🌞 *Good Morning Family* 🌞\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Morning session starts now!")
 
-    time.sleep(30)  # wait before first signal
+    time.sleep(60)  # wait 1 minute before first signal
 
     signals_sent = 0
     total_signals = 5
