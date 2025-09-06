@@ -27,7 +27,7 @@ pairs = [
     ("CHFJPY=X","CHF/JPY"),
     ("NZDJPY=X","NZD/JPY"),
     ("EURAUD=X","EUR/AUD"),
-    ("EURNZD=X","EUR/NZD"),
+    ("EURNZD=X","EURNZD"),
     ("GBPAUD=X","GBP/AUD"),
     ("GBPCAD=X","GBP/CAD"),
     ("GBPNZD=X","GBP/NZD"),
@@ -104,12 +104,19 @@ def run_session(session_name):
         emoji = "🟢📈" if signal == "CALL" else "🔴📉"
         strategy = random.choice(strategy_names)
 
+        # assign confidence
+        if (signals_sent+1) in loss_positions:
+            confidence = random.randint(75, 79)  # weaker confidence for LOSS
+        else:
+            confidence = random.randint(80, 90)  # stronger confidence for WIN
+
         msg = f"""
 ━━━━━━━━━━━━━━━
 💹 *Signal {signals_sent+1}*
 💱 Pair: *{name}*
 📍 Direction: *{signal}* {emoji}
 🧩 Strategy: *{strategy}*
+🎯 Confidence: *{confidence}%*
 ⏳ Expiry: 1 Minute
 ━━━━━━━━━━━━━━━
 """
