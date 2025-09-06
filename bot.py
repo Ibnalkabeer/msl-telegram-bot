@@ -5,6 +5,7 @@ import time
 import requests
 import random
 import os
+import datetime
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -91,7 +92,7 @@ def run_session(session_name):
     # Decide if this session will have 0 or 1 loss
     loss_positions = []
     if random.random() < 0.7:  # 70% chance: 1 loss, 30% chance: no loss
-        loss_positions = [random.randint(1, total_signals)]  
+        loss_positions = [random.randint(1, total_signals)]
 
     used_pairs = random.sample(pairs, total_signals)  # unique pairs per session
 
@@ -133,6 +134,14 @@ def run_session(session_name):
     else:
         send_msg("✅ Morning session ends")
 
+
 if __name__ == "__main__":
     session = os.getenv("SESSION", "morning")
-    run_session(session)
+    weekday = datetime.datetime.utcnow().weekday()  # Monday=0 ... Sunday=6
+    manual_run = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
+
+    # Only run automatically Mon-Fri. On weekends, only run if triggered manually.
+    if weekday < 5 or manual_run:
+        run_session(session)
+    else:
+        print("Weekend detected. Skipping signals unless triggered manually.")
