@@ -6,6 +6,8 @@ import requests
 import random
 import os
 import datetime
+import json
+import calendar
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -48,6 +50,127 @@ strategy_names = [
     "Phantom Scalper"
 ]
 
+STATS_FILE = "msl_stats.json"
+
+# ---------- stats helpers ----------
+def load_stats():
+    try:
+        if os.path.exists(STATS_FILE):
+            with open(STATS_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {"days": {}}
+
+def save_stats(stats):
+    try:
+        with open(STATS_FILE, "w") as f:
+            json.dump(stats, f, indent=2)
+    except Exception as e:
+        print("Stats save error:", e)
+
+def add_session_result(date_key, session_name, wins, losses, fair):
+    stats = load_stats()
+    day = stats["days"].get(date_key, {})
+    day[session_name] = {"wins": wins, "losses": losses, "fair": bool(fair)}
+    stats["days"][date_key] = day
+    save_stats(stats)
+
+def get_day_totals(date_key):
+    stats = load_stats()
+    day = stats["days"].get(date_key, {})
+    w = day.get("morning", {}).get("wins", 0) + day.get("evening", {}).get("wins", 0)
+    l = day.get("morning", {}).get("losses", 0) + day.get("evening", {}).get("losses", 0)
+    fair_count = int(day.get("morning", {}).get("fair", False)) + int(day.get("evening", {}).get("fair", False))
+    return w, l, fair_count
+
+def iter_days_in_range(start_date, end_date):
+    d = start_date
+    while d <= end_date:
+        yield d
+        d += datetime.timedelta(days=1)
+
+def summarize_range(start_date, end_date):
+    total_w = total_l = fair_sessions = 0
+    stats = load_stats()
+    for d in iter_days_in_range(start_date, end_date):
+        key = d.strftime("%Y-%m-%d")
+        day = stats["days"].get(key, {})
+        for sess in ("morning", "evening"):
+            blob = day.get(sess)
+            if blob:
+                total_w += blob.get("wins", 0)
+                total_l += blob.get("losses", 0)
+                fair_sessions += int(blob.get("fair", False))
+    return total_w, total_l, fair_sessions
+
+def is_last_day_of_month(dt):
+    return dt.day == calendar.monthrange(dt.year, dt.month)[1]
+
+def send_daily_summary_if_evening(session_name, today_utc):
+    if session_name != "evening":
+        return
+    time.sleep(15 * 60)
+    date_key = today_utc.strftime("%Y-%m-%d")
+    w, l, _ = get_day_totals(date_key)
+    total = w + l
+    win_rate = round((w / total) * 100) if total else 0
+    msg = f"""
+🗓️ *Daily Performance Recap* — {today_utc.strftime("%A, %d %B %Y")}
+━━━━━━━━━━━━━━━
+✅ Wins: *{w}*
+❌ Losses: *{l}*
+📌 Total Signals: *{total}*
+📈 Win Rate: *{win_rate}%*
+🧠 Consistency over intensity: stick to risk rules and follow the flow.
+━━━━━━━━━━━━━━━
+"""
+    send_msg(msg)
+
+def send_weekly_summary(today_utc):
+    monday = today_utc - datetime.timedelta(days=today_utc.weekday())
+    saturday = monday + datetime.timedelta(days=5)
+    w, l, fair = summarize_range(monday.date(), saturday.date())
+    total = w + l
+    win_rate = round((w / total) * 100) if total else 0
+    week_num = today_utc.isocalendar()[1]
+    msg = f"""
+📅 *Weekly Performance Recap — Week {week_num}*
+━━━━━━━━━━━━━━━
+✅ Wins: *{w}*
+❌ Losses: *{l}*
+⚖️ Fair Sessions: *{fair}*
+📌 Total Signals: *{total}*
+📈 Win Rate: *{win_rate}%*
+💡 Market Note: We navigated varying volatility with discipline—let’s carry the momentum into next week.
+🎯 Great job staying consistent. Risk management first, always.
+━━━━━━━━━━━━━━━
+"""
+    send_msg(msg)
+
+def send_monthly_summary(today_utc):
+    start = datetime.date(today_utc.year, today_utc.month, 1)
+    end = today_utc.date()
+    w, l, fair = summarize_range(start, end)
+    total = w + l
+    win_rate = round((w / total) * 100) if total else 0
+    month_name = today_utc.strftime("%B %Y")
+    msg = f"""
+📊 *Monthly Performance Report — {month_name}*
+━━━━━━━━━━━━━━━
+✅ Total Wins: *{w}*
+❌ Total Losses: *{l}*
+⚖️ Fair Sessions: *{fair}*
+📌 Total Signals: *{total}*
+🏆 Win Rate: *{win_rate:.1f}%*
+—
+🧭 *Trader’s Insight:* The month presented volatility, but disciplined execution kept the edge. 
+🎯 *Coach’s Note:* Outstanding commitment. We scale sustainably—same focus, next month stronger.
+━━━━━━━━━━━━━━━
+"""
+    send_msg(msg)
+# ---------- end stats helpers ----------
+
 # 📡 Telegram sender
 def send_msg(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -84,31 +207,38 @@ def run_session(session_name):
     else:
         send_msg("🌞 *Good Morning Family* 🌞\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Morning session starts now!")
 
-    time.sleep(60)  # wait 1 minute before first signal
+    time.sleep(60)
 
     signals_sent = 0
     total_signals = 5
+    wins = 0
+    losses = 0
 
-    # Decide if this session will have 0 or 1 loss
+    fair_session = False
+    if session_name == "evening":
+        if random.random() < (2/7):
+            fair_session = True
+
     loss_positions = []
-    if random.random() < 0.7:  # 70% chance: 1 loss, 30% chance: no loss
-        loss_positions = [random.randint(1, total_signals)]
+    if fair_session:
+        loss_positions = random.sample(range(1, total_signals+1), 2)
+    else:
+        if random.random() < 0.7:
+            loss_positions = [random.randint(1, total_signals)]
 
-    used_pairs = random.sample(pairs, total_signals)  # unique pairs per session
+    used_pairs = random.sample(pairs, total_signals)
 
     while signals_sent < total_signals:
         symbol, name = used_pairs[signals_sent]
         df = get_data(symbol)
         signal = ema_strategy(df) if df is not None else random.choice(["CALL","PUT"])
-
         emoji = "🟢📈" if signal == "CALL" else "🔴📉"
         strategy = random.choice(strategy_names)
 
-        # assign confidence
         if (signals_sent+1) in loss_positions:
-            confidence = random.randint(75, 79)  # weaker confidence for LOSS
+            confidence = random.randint(75, 79)
         else:
-            confidence = random.randint(80, 90)  # stronger confidence for WIN
+            confidence = random.randint(80, 90)
 
         msg = f"""
 ━━━━━━━━━━━━━━━
@@ -121,20 +251,64 @@ def run_session(session_name):
 ━━━━━━━━━━━━━━━
 """
         send_msg(msg)
-
-        # wait expiry time
         time.sleep(60)
 
-        # Controlled result
         if (signals_sent+1) in loss_positions:
             result = "❌ LOSS 😢"
+            losses += 1
         else:
             result = "✅ WIN 🎉"
+            wins += 1
 
         send_msg(f"📊 *Result for Signal {signals_sent+1}:* {result}")
-
         signals_sent += 1
-        time.sleep(30)  # pause before next signal
+        time.sleep(30)
+
+    time.sleep(60)
+    win_rate = round((wins / total_signals) * 100)
+
+    if fair_session:
+        summary_msg = f"""
+⚖️ *Fair Session!* ⚖️
+━━━━━━━━━━━━━━━
+📊 *{session_name.capitalize()} Session Summary*
+✅ Wins: *{wins}*
+❌ Losses: *{losses}*
+📉 Win Rate: *{win_rate}%*
+📝 Today’s market showed instability, leading to a fair outcome.
+━━━━━━━━━━━━━━━
+"""
+    elif losses == 0:
+        summary_msg = f"""
+🌟 *Perfect Session!* 🌟
+━━━━━━━━━━━━━━━
+📊 *{session_name.capitalize()} Session Summary*
+✅ Wins: *{wins}*
+❌ Losses: *{losses}*
+🏆 Win Rate: *{win_rate}%*
+━━━━━━━━━━━━━━━
+"""
+    else:
+        summary_msg = f"""
+🔥 *Very Good Session!* 🔥
+━━━━━━━━━━━━━━━
+📊 *{session_name.capitalize()} Session Summary*
+✅ Wins: *{wins}*
+❌ Losses: *{losses}*
+📈 Win Rate: *{win_rate}%*
+━━━━━━━━━━━━━━━
+"""
+    send_msg(summary_msg)
+
+    today_utc = datetime.datetime.utcnow()
+    date_key = today_utc.strftime("%Y-%m-%d")
+    add_session_result(date_key, session_name, wins, losses, fair_session)
+
+    send_daily_summary_if_evening(session_name, today_utc)
+    if today_utc.weekday() == 5 and session_name == "morning":  # Saturday 10am
+        send_weekly_summary(today_utc)
+    if is_last_day_of_month(today_utc.date()) and today_utc.hour == 19 and session_name == "evening":  # 8pm WAT = 7pm UTC
+        send_monthly_summary(today_utc)
 
     if session_name == "evening":
         send_msg("✅ Evening session ends")
@@ -144,11 +318,14 @@ def run_session(session_name):
 
 if __name__ == "__main__":
     session = os.getenv("SESSION", "morning")
-    weekday = datetime.datetime.utcnow().weekday()  # Monday=0 ... Sunday=6
+    weekday = datetime.datetime.utcnow().weekday()
     manual_run = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
 
-    # Only run automatically Mon-Fri. On weekends, only run if triggered manually.
     if weekday < 5 or manual_run:
         run_session(session)
+    elif weekday == 5 and session == "morning":  # Saturday 10am weekly recap
+        send_weekly_summary(datetime.datetime.utcnow())
+    elif is_last_day_of_month(datetime.datetime.utcnow().date()) and session == "evening":  # Monthly recap
+        send_monthly_summary(datetime.datetime.utcnow())
     else:
         print("Weekend detected. Skipping signals unless triggered manually.")
