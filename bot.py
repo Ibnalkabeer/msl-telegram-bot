@@ -110,7 +110,8 @@ def is_last_day_of_month(dt):
 def send_daily_summary_if_evening(session_name, today_utc):
     if session_name != "evening":
         return
-    time.sleep(15 * 60)
+    # wait ~5 minutes after evening session before sending daily recap
+    time.sleep(5 * 60)
     date_key = today_utc.strftime("%Y-%m-%d")
     w, l, _ = get_day_totals(date_key)
     total = w + l
