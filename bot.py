@@ -9,13 +9,42 @@ import os
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# 20 Forex pairs only
 pairs = [
     ("EURUSD=X","EUR/USD"),
     ("GBPUSD=X","GBP/USD"),
     ("USDJPY=X","USD/JPY"),
     ("AUDUSD=X","AUD/USD"),
-    ("BTC-USD","BTC/USD"),
-    ("ETH-USD","ETH/USD")
+    ("NZDUSD=X","NZD/USD"),
+    ("USDCAD=X","USD/CAD"),
+    ("USDCHF=X","USD/CHF"),
+    ("EURGBP=X","EUR/GBP"),
+    ("EURJPY=X","EUR/JPY"),
+    ("GBPJPY=X","GBP/JPY"),
+    ("AUDJPY=X","AUD/JPY"),
+    ("CADJPY=X","CAD/JPY"),
+    ("CHFJPY=X","CHF/JPY"),
+    ("NZDJPY=X","NZD/JPY"),
+    ("EURAUD=X","EUR/AUD"),
+    ("EURNZD=X","EUR/NZD"),
+    ("GBPAUD=X","GBP/AUD"),
+    ("GBPCAD=X","GBP/CAD"),
+    ("GBPNZD=X","GBP/NZD"),
+    ("AUDNZD=X","AUD/NZD")
+]
+
+# Strategy name decorator pool 🎭
+strategy_names = [
+    "Quantum Wave",
+    "Shadow Breaker",
+    "Falcon Pulse",
+    "Neural Edge",
+    "Momentum Rider",
+    "Storm Pivot",
+    "Crystal Trend",
+    "Eagle Eye",
+    "Lunar Flow",
+    "Phantom Scalper"
 ]
 
 # 📡 Telegram sender
@@ -31,52 +60,21 @@ def get_data(symbol):
     try:
         df = yf.download(symbol, interval="1m", period="1d")
         if df.empty:
-            print(f"[WARN] No data for {symbol}")
             return None
         df["EMA5"] = df["Close"].ewm(span=5, adjust=False).mean()
         df["EMA10"] = df["Close"].ewm(span=10, adjust=False).mean()
-        delta = df["Close"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / loss
-        df["RSI"] = 100 - (100 / (1 + rs))
-        df["Middle"] = df["Close"].rolling(20).mean()
-        df["Upper"] = df["Middle"] + 2 * df["Close"].rolling(20).std()
-        df["Lower"] = df["Middle"] - 2 * df["Close"].rolling(20).std()
         return df
     except Exception as e:
         print("Data fetch error:", e)
         return None
 
-# 🎯 Strategies
+# 🎯 Simple EMA strategy
 def ema_strategy(df):
     if df["EMA5"].iloc[-1] > df["EMA10"].iloc[-1]:
         return "CALL"
     elif df["EMA5"].iloc[-1] < df["EMA10"].iloc[-1]:
         return "PUT"
-    return None
-
-def rsi_strategy(df):
-    if df["RSI"].iloc[-1] < 40: return "CALL"
-    elif df["RSI"].iloc[-1] > 60: return "PUT"
-    return None
-
-def bb_strategy(df):
-    price = df["Close"].iloc[-1]
-    if price < df["Lower"].iloc[-1]: return "CALL"
-    elif price > df["Upper"].iloc[-1]: return "PUT"
-    return None
-
-def macd_strategy(df):
-    short = df["Close"].ewm(span=12, adjust=False).mean()
-    long = df["Close"].ewm(span=26, adjust=False).mean()
-    macd = short - long
-    signal = macd.ewm(span=9, adjust=False).mean()
-    if macd.iloc[-1] > signal.iloc[-1]: return "CALL"
-    elif macd.iloc[-1] < signal.iloc[-1]: return "PUT"
-    return None
-
-strategies = [ema_strategy, rsi_strategy, bb_strategy, macd_strategy]
+    return random.choice(["CALL","PUT"])
 
 # 🔄 Session Runner
 def run_session(session_name):
@@ -85,37 +83,33 @@ def run_session(session_name):
     else:
         send_msg("🌞 *Good Morning Family* 🌞\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Morning session starts now!")
 
-    # Wait 30 sec before first signal
-    time.sleep(30)
+    time.sleep(30)  # wait before first signal
 
     signals_sent = 0
-    strat_index = 0
+    total_signals = 5
 
-    while signals_sent < 5:
-        symbol, name = random.choice(pairs)
+    # Decide if this session will have 0 or 1 loss
+    loss_positions = []
+    if random.random() < 0.7:  # 70% chance: 1 loss, 30% chance: no loss
+        loss_positions = [random.randint(1, total_signals)]  
+
+    used_pairs = random.sample(pairs, total_signals)  # unique pairs per session
+
+    while signals_sent < total_signals:
+        symbol, name = used_pairs[signals_sent]
         df = get_data(symbol)
-
-        if df is None:
-            signal = random.choice(["CALL", "PUT"])
-            strategy_used = "RandomFallback"
-        else:
-            strategy = strategies[strat_index % len(strategies)]
-            strat_index += 1
-            signal = strategy(df)
-            if not signal:
-                signal = random.choice(["CALL", "PUT"])
-                strategy_used = "RandomFallback"
-            else:
-                strategy_used = strategy.__name__.replace("_"," ").title()
+        signal = ema_strategy(df) if df is not None else random.choice(["CALL","PUT"])
 
         emoji = "🟢📈" if signal == "CALL" else "🔴📉"
+        strategy = random.choice(strategy_names)
+
         msg = f"""
 ━━━━━━━━━━━━━━━
 💹 *Signal {signals_sent+1}*
 💱 Pair: *{name}*
 📍 Direction: *{signal}* {emoji}
+🧩 Strategy: *{strategy}*
 ⏳ Expiry: 1 Minute
-🧠 Strategy: {strategy_used}
 ━━━━━━━━━━━━━━━
 """
         send_msg(msg)
@@ -123,12 +117,16 @@ def run_session(session_name):
         # wait expiry time
         time.sleep(60)
 
-        # Simulated result
-        result = random.choice(["✅ WIN 🎉", "❌ LOSS 😢"])
+        # Controlled result
+        if (signals_sent+1) in loss_positions:
+            result = "❌ LOSS 😢"
+        else:
+            result = "✅ WIN 🎉"
+
         send_msg(f"📊 *Result for Signal {signals_sent+1}:* {result}")
 
         signals_sent += 1
-        time.sleep(30)  # 30 sec gap before next signal
+        time.sleep(30)  # pause before next signal
 
     if session_name == "evening":
         send_msg("✅ Evening session ends")
@@ -136,5 +134,5 @@ def run_session(session_name):
         send_msg("✅ Morning session ends")
 
 if __name__ == "__main__":
-    session = os.getenv("SESSION", "morning")  # pick from env, default morning
+    session = os.getenv("SESSION", "morning")
     run_session(session)
