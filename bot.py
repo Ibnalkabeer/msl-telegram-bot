@@ -107,17 +107,17 @@ def summarize_range(start_date, end_date):
 def is_last_day_of_month(dt):
     return dt.day == calendar.monthrange(dt.year, dt.month)[1]
 
-def send_daily_summary_if_evening(session_name, today_utc):
-    if session_name != "evening":
-        return
-    # wait ~5 minutes after evening session before sending daily recap
-    time.sleep(5 * 60)
+def send_daily_summary(session_name, today_utc):
     date_key = today_utc.strftime("%Y-%m-%d")
     w, l, _ = get_day_totals(date_key)
     total = w + l
     win_rate = round((w / total) * 100) if total else 0
+    if session_name == "morning":
+        title = "Morning Performance Recap"
+    else:
+        title = "Daily Performance Recap"
     msg = f"""
-🗓️ *Daily Performance Recap* — {today_utc.strftime("%A, %d %B %Y")}
+🗓️ *{title}* — {today_utc.strftime("%A, %d %B %Y")}
 ━━━━━━━━━━━━━━━
 ✅ Wins: *{w}*
 ❌ Losses: *{l}*
@@ -265,6 +265,12 @@ def run_session(session_name):
         signals_sent += 1
         time.sleep(30)
 
+    # Session end message
+    if session_name == "evening":
+        send_msg("✅ Evening session ends")
+    else:
+        send_msg("✅ Morning session ends")
+
     time.sleep(60)
     win_rate = round((wins / total_signals) * 100)
 
@@ -299,23 +305,30 @@ def run_session(session_name):
 📈 Win Rate: *{win_rate}%*
 ━━━━━━━━━━━━━━━
 """
-    send_msg(summary_msg)
 
-    today_utc = datetime.datetime.utcnow()
+    if session_name == "evening":
+        time.sleep(60)
+        send_msg(summary_msg)
+        time.sleep(60)
+        today_utc = datetime.datetime.utcnow()
+        send_daily_summary("evening", today_utc)
+    else:
+        today_utc = datetime.datetime.utcnow()
+        time.sleep(60)
+        send_msg(summary_msg)
+        time.sleep(60)
+        send_daily_summary("morning", today_utc)
+
+    # Save stats
     date_key = today_utc.strftime("%Y-%m-%d")
     add_session_result(date_key, session_name, wins, losses, fair_session)
 
-    send_daily_summary_if_evening(session_name, today_utc)
-    if today_utc.weekday() == 5 and session_name == "morning":  # Saturday 10am
+    # Weekly summary on Saturday 10am (no signals)
+    if today_utc.weekday() == 5 and session_name == "morning":
         send_weekly_summary(today_utc)
-    if is_last_day_of_month(today_utc.date()) and today_utc.hour == 19 and session_name == "evening":  # 8pm WAT = 7pm UTC
+    # Monthly summary last day 8pm WAT = 19:00 UTC
+    if is_last_day_of_month(today_utc.date()) and today_utc.hour == 19 and session_name == "evening":
         send_monthly_summary(today_utc)
-
-    if session_name == "evening":
-        send_msg("✅ Evening session ends")
-    else:
-        send_msg("✅ Morning session ends")
-
 
 if __name__ == "__main__":
     session = os.getenv("SESSION", "morning")
@@ -324,9 +337,9 @@ if __name__ == "__main__":
 
     if weekday < 5 or manual_run:
         run_session(session)
-    elif weekday == 5 and session == "morning":  # Saturday 10am weekly recap
+    elif weekday == 5 and session == "morning":  # Saturday weekly recap only
         send_weekly_summary(datetime.datetime.utcnow())
-    elif is_last_day_of_month(datetime.datetime.utcnow().date()) and session == "evening":  # Monthly recap
+    elif is_last_day_of_month(datetime.datetime.utcnow().date()) and session == "evening":
         send_monthly_summary(datetime.datetime.utcnow())
     else:
         print("Weekend detected. Skipping signals unless triggered manually.")
