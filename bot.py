@@ -203,10 +203,22 @@ def ema_strategy(df):
 
 # 🔄 Session Runner
 def run_session(session_name):
+    robot_display = """
+     🤖🔹
+   ╔══════╗
+   ║  👀  ║   👋
+   ╚══════╝
+    ║████║
+   [ MSL  ]
+   [Binary]
+   [  Bot ]
+    ║████║
+   🤖🔹🤖🔹
+"""
     if session_name == "evening":
-        send_msg("🌙 *Good Evening Family* 🌙\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Evening session starts now!")
+        send_msg(robot_display + "\n🌙 *Good Evening Family* 🌙\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Evening session starts now!")
     else:
-        send_msg("🌞 *Good Morning Family* 🌞\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Morning session starts now!")
+        send_msg(robot_display + "\n🌞 *Good Morning Family* 🌞\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Morning session starts now!")
 
     time.sleep(60)
 
