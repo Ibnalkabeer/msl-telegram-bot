@@ -223,7 +223,7 @@ def run_session(session_name):
     time.sleep(60)
 
     signals_sent = 0
-    total_signals = 5
+    total_signals = 10   # changed from 5 ➝ 10
     wins = 0
     losses = 0
 
@@ -237,7 +237,7 @@ def run_session(session_name):
         loss_positions = random.sample(range(1, total_signals+1), 2)
     else:
         if random.random() < 0.7:
-            loss_positions = [random.randint(1, total_signals)]
+            loss_positions = random.sample(range(1, total_signals+1), random.randint(1, 2))  # 1 or 2 losses
 
     used_pairs = random.sample(pairs, total_signals)
 
