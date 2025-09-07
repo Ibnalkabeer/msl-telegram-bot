@@ -318,22 +318,23 @@ def run_session(session_name):
 ━━━━━━━━━━━━━━━
 """
 
+    today_utc = datetime.datetime.utcnow()
+
+    # Save stats FIRST ✅
+    date_key = today_utc.strftime("%Y-%m-%d")
+    add_session_result(date_key, session_name, wins, losses, fair_session)
+
+    # Now send summaries
     if session_name == "evening":
         time.sleep(60)
         send_msg(summary_msg)
         time.sleep(60)
-        today_utc = datetime.datetime.utcnow()
         send_daily_summary("evening", today_utc)
     else:
-        today_utc = datetime.datetime.utcnow()
         time.sleep(60)
         send_msg(summary_msg)
         time.sleep(60)
         send_daily_summary("morning", today_utc)
-
-    # Save stats
-    date_key = today_utc.strftime("%Y-%m-%d")
-    add_session_result(date_key, session_name, wins, losses, fair_session)
 
     # Weekly summary on Saturday 10am (no signals)
     if today_utc.weekday() == 5 and session_name == "morning":
