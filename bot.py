@@ -39,9 +39,8 @@ strategy_map = {
 
 STATS_FILE = "msl_stats.json"
 
-# ---------- FIX ADDED: get_data ----------
+# ---------- get_data ----------
 def get_data(symbol):
-    """Fetch latest price data safely from Yahoo Finance"""
     try:
         df = yf.download(symbol, period="5d", interval="5m")
         return df
@@ -49,7 +48,7 @@ def get_data(symbol):
         print(f"Data fetch failed for {symbol}: {e}")
         return pd.DataFrame()
 
-# ---------- Example Strategy Implementations ----------
+# ---------- Example Strategies ----------
 def ema_strategy(df):
     if df.empty:
         return random.choice(["CALL","PUT"])
@@ -67,7 +66,7 @@ def rsi_strategy(df):
     rsi = 100 - (100 / (1 + rs))
     return "CALL" if rsi.iloc[-1] < 30 else "PUT" if rsi.iloc[-1] > 70 else random.choice(["CALL","PUT"])
 
-# Add placeholder for other strategies
+# Other strategies
 def macd_strategy(df): return random.choice(["CALL","PUT"])
 def bb_strategy(df): return random.choice(["CALL","PUT"])
 def stochastic_strategy(df): return random.choice(["CALL","PUT"])
@@ -77,7 +76,6 @@ def sr_breakout_strategy(df): return random.choice(["CALL","PUT"])
 def psar_strategy(df): return random.choice(["CALL","PUT"])
 def phantom_strategy(df): return random.choice(["CALL","PUT"])
 
-# Map strategy strings to actual functions
 strategy_func_map = {
     "ema_strategy": ema_strategy,
     "rsi_strategy": rsi_strategy,
@@ -146,22 +144,33 @@ def summarize_range(start_date, end_date):
 def is_last_day_of_month(dt):
     return dt.day == calendar.monthrange(dt.year, dt.month)[1]
 
+# ---------- Telegram ----------
+def send_msg(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    try:
+        resp = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
+        if resp.status_code != 200:
+            print(f"Telegram API error {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print("Telegram error:", e)
+
+# ---------- Summaries ----------
 def send_daily_summary(session_name, today_utc, motivational_text=""):
     date_key = today_utc.strftime("%Y-%m-%d")
     w, l, _ = get_day_totals(date_key)
     total = w + l
     win_rate = round((w / total) * 100) if total else 0
     title = "Morning Performance Recap" if session_name=="morning" else "Daily Performance Recap"
-    msg = f"""
-🗓️ *{title}* — {today_utc.strftime("%A, %d %B %Y")}
-━━━━━━━━━━━━━━━
-✅ Wins: *{w}*
-❌ Losses: *{l}*
-📌 Total Signals: *{total}*
-📈 Win Rate: *{win_rate}%*
-💬 {motivational_text}
-━━━━━━━━━━━━━━━
-"""
+    msg = "\n".join([
+        f"🗓️ *{title}* — {today_utc.strftime('%A, %d %B %Y')}",
+        "━━━━━━━━━━━━━━━",
+        f"✅ Wins: *{w}*",
+        f"❌ Losses: *{l}*",
+        f"📌 Total Signals: *{total}*",
+        f"📈 Win Rate: *{win_rate}%*",
+        f"💬 {motivational_text}",
+        "━━━━━━━━━━━━━━━"
+    ])
     send_msg(msg)
 
 def send_weekly_summary(today_utc):
@@ -171,16 +180,16 @@ def send_weekly_summary(today_utc):
     total = w + l
     win_rate = round((w / total) * 100) if total else 0
     week_num = today_utc.isocalendar()[1]
-    msg = f"""
-📅 *Weekly Performance Recap — Week {week_num}*
-━━━━━━━━━━━━━━━
-✅ Wins: *{w}*
-❌ Losses: *{l}*
-⚖️ Fair Sessions: *{fair}*
-📌 Total Signals: *{total}*
-📈 Win Rate: *{win_rate}%*
-━━━━━━━━━━━━━━━
-"""
+    msg = "\n".join([
+        f"📅 *Weekly Performance Recap — Week {week_num}*",
+        "━━━━━━━━━━━━━━━",
+        f"✅ Wins: *{w}*",
+        f"❌ Losses: *{l}*",
+        f"⚖️ Fair Sessions: *{fair}*",
+        f"📌 Total Signals: *{total}*",
+        f"📈 Win Rate: *{win_rate}%*",
+        "━━━━━━━━━━━━━━━"
+    ])
     send_msg(msg)
 
 def send_monthly_summary(today_utc):
@@ -190,33 +199,25 @@ def send_monthly_summary(today_utc):
     total = w + l
     win_rate = round((w / total) * 100) if total else 0
     month_name = today_utc.strftime("%B %Y")
-    msg = f"""
-📊 *Monthly Performance Report — {month_name}*
-━━━━━━━━━━━━━━━
-✅ Total Wins: *{w}*
-❌ Total Losses: *{l}*
-⚖️ Fair Sessions: *{fair}*
-📌 Total Signals: *{total}*
-🏆 Win Rate: *{win_rate:.1f}%*
-━━━━━━━━━━━━━━━
-"""
+    msg = "\n".join([
+        f"📊 *Monthly Performance Report — {month_name}*",
+        "━━━━━━━━━━━━━━━",
+        f"✅ Total Wins: *{w}*",
+        f"❌ Total Losses: *{l}*",
+        f"⚖️ Fair Sessions: *{fair}*",
+        f"📌 Total Signals: *{total}*",
+        f"🏆 Win Rate: *{win_rate:.1f}%*",
+        "━━━━━━━━━━━━━━━"
+    ])
     send_msg(msg)
-
-# ---------- Telegram ----------
-def send_msg(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    try:
-        requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
-    except Exception as e:
-        print("Telegram error:", e)
 
 # ---------- Session Runner ----------
 def run_session(session_name):
     today = datetime.datetime.utcnow()
-    weekday = today.weekday()  # 0 = Monday, 6 = Sunday
+    weekday = today.weekday()
 
-    # no signals weekends
     if weekday >= 5 and session_name in ("morning", "evening"):
+        print("Weekend: no signals.")
         return
 
     robot_display = """
@@ -231,12 +232,9 @@ def run_session(session_name):
     ║████║
    🤖🔹🤖🔹
 """
-    if session_name == "evening":
-        send_msg(robot_display + "\n🌙 *Good Evening Family* 🌙\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Evening session starts now!")
-    else:
-        send_msg(robot_display + "\n🌞 *Good Morning Family* 🌞\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 Morning session starts now!")
-
-    time.sleep(60)
+    greet = "🌙 *Good Evening Family* 🌙" if session_name=="evening" else "🌞 *Good Morning Family* 🌞"
+    send_msg(robot_display + f"\n{greet}\n\n📡 *MSL Binary Signal* 📡\n━━━━━━━━━━━━━━━\n📊 {session_name.capitalize()} session starts now!")
+    time.sleep(2)  # reduced sleep for testing
 
     signals_sent = 0
     total_signals = 10
@@ -262,11 +260,10 @@ def run_session(session_name):
         strat_func = strategy_func_map.get(strat_func_str, lambda df: random.choice(["CALL","PUT"]))
 
         df = get_data(symbol)
-        signal = strat_func(df) if not df.empty else random.choice(["CALL","PUT"])  # strategy implemented
+        signal = strat_func(df) if not df.empty else random.choice(["CALL","PUT"])
 
         emoji = "🟢📈" if signal == "CALL" else "🔴📉"
 
-        # Determine win/loss
         if (signals_sent+1) in loss_positions:
             confidence = random.randint(75, 79)
             losses += 1
@@ -276,32 +273,61 @@ def run_session(session_name):
             wins += 1
             result_msg = f"✅ Signal {signals_sent+1} result: WIN"
 
-        msg = f"""
-━━━━━━━━━━━━━━━
-💹 *Signal {signals_sent+1}*
-💱 Pair: *{name}*
-📍 Direction: *{signal}* {emoji}
-⚙️ Strategy: *{strat_name}*
-🎯 Confidence: *{confidence}%*
-━━━━━━━━━━━━━━━
-"""
+        msg = "\n".join([
+            "━━━━━━━━━━━━━━━",
+            f"💹 *Signal {signals_sent+1}*",
+            f"💱 Pair: *{name}*",
+            f"📍 Direction: *{signal}* {emoji}",
+            f"⚙️ Strategy: *{strat_name}*",
+            f"🎯 Confidence: *{confidence}%",
+            "━━━━━━━━━━━━━━━"
+        ])
         send_msg(msg)
-        time.sleep(30)  # Wait 30s before sending result
+        time.sleep(1)  # reduced sleep for testing
         send_msg(result_msg)
-        time.sleep(30)  # Wait 30s before next signal
+        time.sleep(1)
 
         signals_sent += 1
 
-    # end of session message
-    if session_name == "evening":
-        send_msg("🌙 Evening session ends.")
-    else:
-        send_msg("🌞 Morning session ends.")
+    send_msg(f"🌙 Evening session ends." if session_name=="evening" else "🌞 Morning session ends.")
 
     date_key = today.strftime("%Y-%m-%d")
     add_session_result(date_key, session_name, wins, losses, fair_session)
 
-    # session summary after 30s
-    time.sleep(30)
+    # session summary
+    time.sleep(2)
     if wins >= 9:
-        motivational = "Excellent session! Keep up the great work
+        motivational = "Excellent session! Keep up the great work 💪"
+    elif wins == 8:
+        motivational = "Very good session! Stay consistent 🔥"
+    else:
+        motivational = "Unstable market, stay cautious 👀"
+    send_daily_summary(session_name, today, motivational)
+
+    # evening session: also daily summary
+    if session_name == "evening":
+        time.sleep(2)
+        send_daily_summary("daily", today, "That's your daily recap! Keep learning and growing 📈")
+
+# ---------- Entrypoint ----------
+def main():
+    session = os.getenv("SESSION", "").lower().strip()
+    now = datetime.datetime.utcnow()
+
+    if session in ("morning", "evening"):
+        print(f"Running {session} session...")
+        run_session(session)
+    elif session == "weekly":
+        print("Running weekly summary...")
+        send_weekly_summary(now)
+    elif session == "monthly":
+        if is_last_day_of_month(now.date()):
+            print("Running monthly summary...")
+            send_monthly_summary(now)
+        else:
+            print("Not the last day of the month, skipping monthly summary.")
+    else:
+        print("No valid SESSION specified. Set SESSION=morning|evening|weekly|monthly")
+
+if __name__ == "__main__":
+    main()
