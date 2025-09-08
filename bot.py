@@ -259,5 +259,29 @@ def run_session(session_name):
         time.sleep(60)
         send_daily_summary("daily", today)
 
-# ---------- Data Fetchers & Indicators ----------
-# (same functions as your original code, unchanged)
+# ---------- Entrypoint ----------
+def main():
+    session = os.getenv("SESSION", "").lower().strip()
+    now = datetime.datetime.utcnow()
+
+    if session in ("morning", "evening"):
+        print(f"Running {session} session...")
+        run_session(session)
+
+    elif session == "weekly":
+        print("Running weekly summary...")
+        send_weekly_summary(now)
+
+    elif session == "monthly":
+        if is_last_day_of_month(now.date()):
+            print("Running monthly summary...")
+            send_monthly_summary(now)
+        else:
+            print("Not the last day of the month, skipping monthly summary.")
+
+    else:
+        print("No valid SESSION specified. Set SESSION=morning|evening|weekly|monthly")
+
+
+if __name__ == "__main__":
+    main()
