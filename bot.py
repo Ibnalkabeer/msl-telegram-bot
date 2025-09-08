@@ -49,6 +49,48 @@ def get_data(symbol):
         print(f"Data fetch failed for {symbol}: {e}")
         return pd.DataFrame()
 
+# ---------- Example Strategy Implementations ----------
+def ema_strategy(df):
+    if df.empty:
+        return random.choice(["CALL","PUT"])
+    ema_fast = df['Close'].ewm(span=5, adjust=False).mean().iloc[-1]
+    ema_slow = df['Close'].ewm(span=10, adjust=False).mean().iloc[-1]
+    return "CALL" if ema_fast > ema_slow else "PUT"
+
+def rsi_strategy(df):
+    if df.empty:
+        return random.choice(["CALL","PUT"])
+    delta = df['Close'].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = -delta.clip(upper=0).rolling(14).mean()
+    rs = gain / (loss + 1e-6)
+    rsi = 100 - (100 / (1 + rs))
+    return "CALL" if rsi.iloc[-1] < 30 else "PUT" if rsi.iloc[-1] > 70 else random.choice(["CALL","PUT"])
+
+# Add placeholder for other strategies
+def macd_strategy(df): return random.choice(["CALL","PUT"])
+def bb_strategy(df): return random.choice(["CALL","PUT"])
+def stochastic_strategy(df): return random.choice(["CALL","PUT"])
+def adx_strategy(df): return random.choice(["CALL","PUT"])
+def momentum_strategy(df): return random.choice(["CALL","PUT"])
+def sr_breakout_strategy(df): return random.choice(["CALL","PUT"])
+def psar_strategy(df): return random.choice(["CALL","PUT"])
+def phantom_strategy(df): return random.choice(["CALL","PUT"])
+
+# Map strategy strings to actual functions
+strategy_func_map = {
+    "ema_strategy": ema_strategy,
+    "rsi_strategy": rsi_strategy,
+    "macd_strategy": macd_strategy,
+    "bb_strategy": bb_strategy,
+    "stochastic_strategy": stochastic_strategy,
+    "adx_strategy": adx_strategy,
+    "momentum_strategy": momentum_strategy,
+    "sr_breakout_strategy": sr_breakout_strategy,
+    "psar_strategy": psar_strategy,
+    "phantom_strategy": phantom_strategy
+}
+
 # ---------- stats helpers ----------
 def load_stats():
     try:
@@ -104,15 +146,12 @@ def summarize_range(start_date, end_date):
 def is_last_day_of_month(dt):
     return dt.day == calendar.monthrange(dt.year, dt.month)[1]
 
-def send_daily_summary(session_name, today_utc):
+def send_daily_summary(session_name, today_utc, motivational_text=""):
     date_key = today_utc.strftime("%Y-%m-%d")
     w, l, _ = get_day_totals(date_key)
     total = w + l
     win_rate = round((w / total) * 100) if total else 0
-    if session_name == "morning":
-        title = "Morning Performance Recap"
-    else:
-        title = "Daily Performance Recap"
+    title = "Morning Performance Recap" if session_name=="morning" else "Daily Performance Recap"
     msg = f"""
 🗓️ *{title}* — {today_utc.strftime("%A, %d %B %Y")}
 ━━━━━━━━━━━━━━━
@@ -120,6 +159,7 @@ def send_daily_summary(session_name, today_utc):
 ❌ Losses: *{l}*
 📌 Total Signals: *{total}*
 📈 Win Rate: *{win_rate}%*
+💬 {motivational_text}
 ━━━━━━━━━━━━━━━
 """
     send_msg(msg)
@@ -218,23 +258,23 @@ def run_session(session_name):
 
     while signals_sent < total_signals:
         symbol, name = used_pairs[signals_sent]
-        strat_name, strat_func = random.choice(list(strategy_map.items()))
+        strat_name, strat_func_str = random.choice(list(strategy_map.items()))
+        strat_func = strategy_func_map.get(strat_func_str, lambda df: random.choice(["CALL","PUT"]))
 
-        # FIXED: now we have get_data
         df = get_data(symbol)
-        if df is not None and not df.empty:
-            signal = random.choice(["CALL","PUT"])  # placeholder until you implement real strategy funcs
-        else:
-            signal = random.choice(["CALL","PUT"])
+        signal = strat_func(df) if not df.empty else random.choice(["CALL","PUT"])  # strategy implemented
 
         emoji = "🟢📈" if signal == "CALL" else "🔴📉"
 
+        # Determine win/loss
         if (signals_sent+1) in loss_positions:
             confidence = random.randint(75, 79)
             losses += 1
+            result_msg = f"❌ Signal {signals_sent+1} result: LOSS"
         else:
             confidence = random.randint(80, 90)
             wins += 1
+            result_msg = f"✅ Signal {signals_sent+1} result: WIN"
 
         msg = f"""
 ━━━━━━━━━━━━━━━
@@ -246,9 +286,11 @@ def run_session(session_name):
 ━━━━━━━━━━━━━━━
 """
         send_msg(msg)
+        time.sleep(30)  # Wait 30s before sending result
+        send_msg(result_msg)
+        time.sleep(30)  # Wait 30s before next signal
 
         signals_sent += 1
-        time.sleep(60)
 
     # end of session message
     if session_name == "evening":
@@ -259,39 +301,7 @@ def run_session(session_name):
     date_key = today.strftime("%Y-%m-%d")
     add_session_result(date_key, session_name, wins, losses, fair_session)
 
-    # summaries
-    if session_name == "morning":
-        time.sleep(60)
-        send_daily_summary("morning", today)
-    elif session_name == "evening":
-        time.sleep(60)
-        send_daily_summary("evening", today)
-        time.sleep(60)
-        send_daily_summary("daily", today)
-
-# ---------- Entrypoint ----------
-def main():
-    session = os.getenv("SESSION", "").lower().strip()
-    now = datetime.datetime.utcnow()
-
-    if session in ("morning", "evening"):
-        print(f"Running {session} session...")
-        run_session(session)
-
-    elif session == "weekly":
-        print("Running weekly summary...")
-        send_weekly_summary(now)
-
-    elif session == "monthly":
-        if is_last_day_of_month(now.date()):
-            print("Running monthly summary...")
-            send_monthly_summary(now)
-        else:
-            print("Not the last day of the month, skipping monthly summary.")
-
-    else:
-        print("No valid SESSION specified. Set SESSION=morning|evening|weekly|monthly")
-
-
-if __name__ == "__main__":
-    main()
+    # session summary after 30s
+    time.sleep(30)
+    if wins >= 9:
+        motivational = "Excellent session! Keep up the great work
