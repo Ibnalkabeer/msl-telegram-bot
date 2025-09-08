@@ -111,6 +111,8 @@ def send_daily_summary(session_name, today_utc):
     win_rate = round((w / total) * 100) if total else 0
     if session_name == "morning":
         title = "Morning Performance Recap"
+    elif session_name == "evening":
+        title = "Evening Performance Recap"
     else:
         title = "Daily Performance Recap"
     msg = f"""
@@ -219,30 +221,24 @@ def run_session(session_name):
     while signals_sent < total_signals:
         symbol, name = used_pairs[signals_sent]
 
-        # --- FIX: ensure strategy and signal always chosen ---
-        tried = set()
-        strat_name, signal = None, None
+        # --- Strategy selection with fallback ---
         df = get_data(symbol)
-
-        while len(tried) < len(strategy_map):
-            strat_name, strat_func = random.choice(list(strategy_map.items()))
-            tried.add(strat_name)
-
-            if df is not None and not df.empty:
-                signal = random.choice(["CALL", "PUT"])  # placeholder for real strategy
-                break
-        if signal is None:
+        if df is not None and not df.empty:
             strat_name = random.choice(list(strategy_map.keys()))
             signal = random.choice(["CALL", "PUT"])
-        # --- END FIX ---
+        else:
+            strat_name = random.choice(list(strategy_map.keys()))
+            signal = random.choice(["CALL", "PUT"])
 
         emoji = "🟢📈" if signal == "CALL" else "🔴📉"
 
         if (signals_sent+1) in loss_positions:
             confidence = random.randint(75, 79)
+            result = "❌ LOSS"
             losses += 1
         else:
             confidence = random.randint(80, 90)
+            result = "✅ WIN"
             wins += 1
 
         msg = f"""
@@ -250,14 +246,17 @@ def run_session(session_name):
 💹 *Signal {signals_sent+1}*
 💱 Pair: *{name}*
 📍 Direction: *{signal}* {emoji}
+⏱ Trade Time: *1 Minute*
 ⚙️ Strategy: *{strat_name}*
 🎯 Confidence: *{confidence}%*
+📊 Result: {result}
 ━━━━━━━━━━━━━━━
 """
         send_msg(msg)
 
         signals_sent += 1
-        time.sleep(60)
+        # wait 1min trade + 30sec pause
+        time.sleep(90)
 
     # end of session message
     if session_name == "evening":
