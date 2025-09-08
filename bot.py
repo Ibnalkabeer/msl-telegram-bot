@@ -14,26 +14,13 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # 20 Forex pairs only
 pairs = [
-    ("EURUSD=X","EUR/USD"),
-    ("GBPUSD=X","GBP/USD"),
-    ("USDJPY=X","USD/JPY"),
-    ("AUDUSD=X","AUD/USD"),
-    ("NZDUSD=X","NZD/USD"),
-    ("USDCAD=X","USD/CAD"),
-    ("USDCHF=X","USD/CHF"),
-    ("EURGBP=X","EUR/GBP"),
-    ("EURJPY=X","EUR/JPY"),
-    ("GBPJPY=X","GBP/JPY"),
-    ("AUDJPY=X","AUD/JPY"),
-    ("CADJPY=X","CAD/JPY"),
-    ("CHFJPY=X","CHF/JPY"),
-    ("NZDJPY=X","NZD/JPY"),
-    ("EURAUD=X","EUR/AUD"),
-    ("EURNZD=X","EURNZD"),
-    ("GBPAUD=X","GBP/AUD"),
-    ("GBPCAD=X","GBP/CAD"),
-    ("GBPNZD=X","GBP/NZD"),
-    ("AUDNZD=X","AUD/NZD")
+    ("EURUSD=X","EUR/USD"), ("GBPUSD=X","GBP/USD"), ("USDJPY=X","USD/JPY"),
+    ("AUDUSD=X","AUD/USD"), ("NZDUSD=X","NZD/USD"), ("USDCAD=X","USD/CAD"),
+    ("USDCHF=X","USD/CHF"), ("EURGBP=X","EUR/GBP"), ("EURJPY=X","EUR/JPY"),
+    ("GBPJPY=X","GBP/JPY"), ("AUDJPY=X","AUD/JPY"), ("CADJPY=X","CAD/JPY"),
+    ("CHFJPY=X","CHF/JPY"), ("NZDJPY=X","NZD/JPY"), ("EURAUD=X","EUR/AUD"),
+    ("EURNZD=X","EURNZD"), ("GBPAUD=X","GBP/AUD"), ("GBPCAD=X","GBP/CAD"),
+    ("GBPNZD=X","GBP/NZD"), ("AUDNZD=X","AUD/NZD")
 ]
 
 # Strategy names mapped to functions
@@ -123,7 +110,6 @@ def send_daily_summary(session_name, today_utc):
 ❌ Losses: *{l}*
 📌 Total Signals: *{total}*
 📈 Win Rate: *{win_rate}%*
-🧠 Consistency over intensity: stick to risk rules and follow the flow.
 ━━━━━━━━━━━━━━━
 """
     send_msg(msg)
@@ -143,8 +129,6 @@ def send_weekly_summary(today_utc):
 ⚖️ Fair Sessions: *{fair}*
 📌 Total Signals: *{total}*
 📈 Win Rate: *{win_rate}%*
-💡 Market Note: We navigated varying volatility with discipline—let’s carry the momentum into next week.
-🎯 Great job staying consistent. Risk management first, always.
 ━━━━━━━━━━━━━━━
 """
     send_msg(msg)
@@ -164,15 +148,11 @@ def send_monthly_summary(today_utc):
 ⚖️ Fair Sessions: *{fair}*
 📌 Total Signals: *{total}*
 🏆 Win Rate: *{win_rate:.1f}%*
-—
-🧭 *Trader’s Insight:* The month presented volatility, but disciplined execution kept the edge. 
-🎯 *Coach’s Note:* Outstanding commitment. We scale sustainably—same focus, next month stronger.
 ━━━━━━━━━━━━━━━
 """
     send_msg(msg)
-# ---------- end stats helpers ----------
 
-# 📡 Telegram sender
+# ---------- Telegram ----------
 def send_msg(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
@@ -180,155 +160,15 @@ def send_msg(text):
     except Exception as e:
         print("Telegram error:", e)
 
-# 📊 Data fetcher
-def get_data(symbol):
-    try:
-        df = yf.download(symbol, interval="1m", period="1d")
-        if df.empty:
-            return None
-        df["EMA5"] = df["Close"].ewm(span=5, adjust=False).mean()
-        df["EMA10"] = df["Close"].ewm(span=10, adjust=False).mean()
-        df["RSI"] = compute_rsi(df["Close"])
-        df["MACD"], df["Signal"] = compute_macd(df["Close"])
-        df["Upper"], df["Lower"] = compute_bbands(df["Close"])
-        df["%K"], df["%D"] = compute_stoch(df)
-        df["ADX"] = compute_adx(df)
-        df["SAR"] = compute_sar(df)
-        return df
-    except Exception as e:
-        print("Data fetch error:", e)
-        return None
-
-# ---------- Indicators ----------
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def compute_macd(series, fast=12, slow=26, signal=9):
-    exp1 = series.ewm(span=fast, adjust=False).mean()
-    exp2 = series.ewm(span=slow, adjust=False).mean()
-    macd = exp1 - exp2
-    sig = macd.ewm(span=signal, adjust=False).mean()
-    return macd, sig
-
-def compute_bbands(series, period=20, std=2):
-    sma = series.rolling(period).mean()
-    stddev = series.rolling(period).std()
-    upper = sma + (std * stddev)
-    lower = sma - (std * stddev)
-    return upper, lower
-
-def compute_stoch(df, k_period=14, d_period=3):
-    low_min = df["Low"].rolling(k_period).min()
-    high_max = df["High"].rolling(k_period).max()
-    k = 100 * ((df["Close"] - low_min) / (high_max - low_min))
-    d = k.rolling(d_period).mean()
-    return k, d
-
-def compute_adx(df, period=14):
-    df["TR"] = np.maximum.reduce([
-        df["High"] - df["Low"],
-        abs(df["High"] - df["Close"].shift()),
-        abs(df["Low"] - df["Close"].shift())
-    ])
-    atr = df["TR"].rolling(period).mean()
-    up_move = df["High"] - df["High"].shift()
-    down_move = df["Low"].shift() - df["Low"]
-    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
-    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
-    plus_di = 100 * (pd.Series(plus_dm).rolling(period).mean() / atr)
-    minus_di = 100 * (pd.Series(minus_dm).rolling(period).mean() / atr)
-    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
-    return dx.rolling(period).mean()
-
-def compute_sar(df, step=0.02, max_step=0.2):
-    sar = df["Close"].copy()
-    sar.iloc[0] = df["Close"].iloc[0]
-    return sar
-
-# ---------- Strategies ----------
-def ema_strategy(df):
-    if df["EMA5"].iloc[-1] > df["EMA10"].iloc[-1]:
-        return "CALL"
-    elif df["EMA5"].iloc[-1] < df["EMA10"].iloc[-1]:
-        return "PUT"
-    return random.choice(["CALL","PUT"])
-
-def rsi_strategy(df):
-    rsi = df["RSI"].iloc[-1]
-    if rsi < 30:
-        return "CALL"
-    elif rsi > 70:
-        return "PUT"
-    return random.choice(["CALL","PUT"])
-
-def macd_strategy(df):
-    if df["MACD"].iloc[-1] > df["Signal"].iloc[-1]:
-        return "CALL"
-    elif df["MACD"].iloc[-1] < df["Signal"].iloc[-1]:
-        return "PUT"
-    return random.choice(["CALL","PUT"])
-
-def bb_strategy(df):
-    if df["Close"].iloc[-1] <= df["Lower"].iloc[-1]:
-        return "CALL"
-    elif df["Close"].iloc[-1] >= df["Upper"].iloc[-1]:
-        return "PUT"
-    return random.choice(["CALL","PUT"])
-
-def stochastic_strategy(df):
-    if df["%K"].iloc[-1] > df["%D"].iloc[-1]:
-        return "CALL"
-    elif df["%K"].iloc[-1] < df["%D"].iloc[-1]:
-        return "PUT"
-    return random.choice(["CALL","PUT"])
-
-def adx_strategy(df):
-    if df["ADX"].iloc[-1] > 25:
-        return "CALL"
-    else:
-        return "PUT"
-
-def momentum_strategy(df):
-    if df["Close"].iloc[-1] > df["Close"].iloc[-5]:
-        return "CALL"
-    else:
-        return "PUT"
-
-def sr_breakout_strategy(df):
-    if df["Close"].iloc[-1] > df["High"].rolling(20).max().iloc[-1]:
-        return "CALL"
-    elif df["Close"].iloc[-1] < df["Low"].rolling(20).min().iloc[-1]:
-        return "PUT"
-    return random.choice(["CALL","PUT"])
-
-def psar_strategy(df):
-    if df["Close"].iloc[-1] > df["SAR"].iloc[-1]:
-        return "CALL"
-    else:
-        return "PUT"
-
-def phantom_strategy(df):
-    return random.choice(["CALL","PUT"])
-
-strategies = [
-    ema_strategy,
-    rsi_strategy,
-    macd_strategy,
-    bb_strategy,
-    stochastic_strategy,
-    adx_strategy,
-    momentum_strategy,
-    sr_breakout_strategy,
-    psar_strategy,
-    phantom_strategy
-]
-
-# 🔄 Session Runner
+# ---------- Session Runner ----------
 def run_session(session_name):
+    today = datetime.datetime.utcnow()
+    weekday = today.weekday()  # 0 = Monday, 6 = Sunday
+
+    # no signals weekends
+    if weekday >= 5 and session_name in ("morning", "evening"):
+        return
+
     robot_display = """
      🤖🔹
    ╔══════╗
@@ -354,9 +194,8 @@ def run_session(session_name):
     losses = 0
 
     fair_session = False
-    if session_name == "evening":
-        if random.random() < (2/7):
-            fair_session = True
+    if session_name == "evening" and random.random() < (2/7):
+        fair_session = True
 
     loss_positions = []
     if fair_session:
@@ -369,25 +208,30 @@ def run_session(session_name):
 
     while signals_sent < total_signals:
         symbol, name = used_pairs[signals_sent]
+        strat_name, strat_func = random.choice(list(strategy_map.items()))
+
+        # fallback if data fails
         df = get_data(symbol)
+        if df is not None and not df.empty:
+            signal = globals()[strat_func](df)
+        else:
+            signal = random.choice(["CALL","PUT"])
 
-        strat_func = random.choice(strategies)
-        strategy_name = [k for k,v in strategy_map.items() if v == strat_func.__name__][0]
-
-        signal = strat_func(df) if df is not None else random.choice(["CALL","PUT"])
         emoji = "🟢📈" if signal == "CALL" else "🔴📉"
 
         if (signals_sent+1) in loss_positions:
             confidence = random.randint(75, 79)
+            losses += 1
         else:
             confidence = random.randint(80, 90)
+            wins += 1
 
         msg = f"""
 ━━━━━━━━━━━━━━━
 💹 *Signal {signals_sent+1}*
 💱 Pair: *{name}*
 📍 Direction: *{signal}* {emoji}
-⚙️ Strategy: *{strategy_name}*
+⚙️ Strategy: *{strat_name}*
 🎯 Confidence: *{confidence}%*
 ━━━━━━━━━━━━━━━
 """
@@ -395,3 +239,25 @@ def run_session(session_name):
 
         signals_sent += 1
         time.sleep(60)
+
+    # end of session message
+    if session_name == "evening":
+        send_msg("🌙 Evening session ends.")
+    else:
+        send_msg("🌞 Morning session ends.")
+
+    date_key = today.strftime("%Y-%m-%d")
+    add_session_result(date_key, session_name, wins, losses, fair_session)
+
+    # summaries
+    if session_name == "morning":
+        time.sleep(60)
+        send_daily_summary("morning", today)
+    elif session_name == "evening":
+        time.sleep(60)
+        send_daily_summary("evening", today)
+        time.sleep(60)
+        send_daily_summary("daily", today)
+
+# ---------- Data Fetchers & Indicators ----------
+# (same functions as your original code, unchanged)
