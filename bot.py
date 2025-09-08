@@ -241,7 +241,8 @@ def run_session(session_name):
             result = "✅ WIN"
             wins += 1
 
-        msg = f"""
+        # --- First send SIGNAL only ---
+        msg_signal = f"""
 ━━━━━━━━━━━━━━━
 💹 *Signal {signals_sent+1}*
 💱 Pair: *{name}*
@@ -249,14 +250,24 @@ def run_session(session_name):
 ⏱ Trade Time: *1 Minute*
 ⚙️ Strategy: *{strat_name}*
 🎯 Confidence: *{confidence}%*
-📊 Result: {result}
 ━━━━━━━━━━━━━━━
 """
-        send_msg(msg)
+        send_msg(msg_signal)
+
+        # wait trade duration
+        time.sleep(60)
+
+        # --- Then send RESULT ---
+        msg_result = f"""
+📊 *Signal {signals_sent+1} Result*
+Result: {result}
+━━━━━━━━━━━━━━━
+"""
+        send_msg(msg_result)
 
         signals_sent += 1
-        # wait 1min trade + 30sec pause
-        time.sleep(90)
+        # extra 30sec before next signal
+        time.sleep(30)
 
     # end of session message
     if session_name == "evening":
