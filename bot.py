@@ -8,6 +8,7 @@ import os
 import datetime
 import json
 import calendar
+from PIL import Image, ImageDraw, ImageFont
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -172,6 +173,52 @@ def send_msg(text):
     except Exception as e:
         print("Telegram error:", e)
 
+def send_photo(image_path, caption=""):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    try:
+        with open(image_path, "rb") as img:
+            requests.post(url, data={"chat_id": CHAT_ID, "caption": caption}, files={"photo": img})
+    except Exception as e:
+        print("Telegram photo error:", e)
+
+# ---------- Trade Result Image ----------
+def generate_result_image(pair, result):
+    payout = random.randint(50, 100)
+    profit = round(payout * random.uniform(0.7, 0.9), 2)
+
+    width, height = 500, 300
+    img = Image.new("RGB", (width, height), color=(25, 30, 40))
+    draw = ImageDraw.Draw(img)
+
+    # Fonts
+    try:
+        font_large = ImageFont.truetype("arial.ttf", 36)
+        font_medium = ImageFont.truetype("arial.ttf", 28)
+    except:
+        font_large = font_medium = None  # fallback
+
+    # Header
+    draw.text((20, 20), "TRADE CLOSED", fill=(255, 255, 255), font=font_large)
+
+    # Pair
+    draw.text((20, 80), f"Pair: {pair}", fill=(200, 200, 200), font=font_medium)
+
+    # Payout & Profit
+    draw.text((20, 140), f"Payout: ${payout}", fill=(200, 200, 200), font=font_medium)
+    draw.text((20, 180), f"Profit: ${profit}", fill=(200, 200, 200), font=font_medium)
+
+    # Result
+    if "WIN" in result:
+        color = (0, 200, 100)
+    else:
+        color = (200, 50, 50)
+    draw.text((20, 240), f"Result: {result}", fill=color, font=font_medium)
+
+    # Save
+    file_path = f"result_{pair.replace('/', '')}_{int(time.time())}.png"
+    img.save(file_path)
+    return file_path
+
 # ---------- Session Runner ----------
 def run_session(session_name):
     today = datetime.datetime.utcnow()
@@ -264,6 +311,10 @@ Result: {result}
 ━━━━━━━━━━━━━━━
 """
         send_msg(msg_result)
+
+        # attach image
+        img_path = generate_result_image(name, result)
+        send_photo(img_path)
 
         signals_sent += 1
         # extra 30sec before next signal
